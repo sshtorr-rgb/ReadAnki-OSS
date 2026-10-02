@@ -1,0 +1,30 @@
+{
+  "manifest_version": 3,
+  "name": "ReadAnki",
+  "version": "3.0.5",
+  "description": "英文の構文・文法をAI解説し、Anki化するリーディング学習アシスタント（UI v3）",
+  "permissions": ["storage", "contextMenus", "activeTab", "scripting"],
+  "host_permissions": [
+    "https://generativelanguage.googleapis.com/*",
+    "https://api.openai.com/*",
+    "http://localhost/*",
+    "http://127.0.0.1/*"
+  ],
+  "optional_host_permissions": ["https://*/*", "http://*/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "commands": {
+    "activate-readanki": {
+      "suggested_key": {
+        "default": "Alt+Shift+R"
+      },
+      "description": "このページでReadAnkiを有効化"
+    }
+  },
+  "options_page": "options.html",
+  "action": {
+    "default_title": "ReadAnki",
+    "default_popup": "popup.html"
+  }
+}
