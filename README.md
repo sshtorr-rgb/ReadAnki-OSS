@@ -1,19 +1,19 @@
 # ReadAnki Chrome/Edge 拡張機能 (Windows導入手順)
 
 ニュース等のWeb英文読解中に、ReadAnkiを有効化したタブでテキストを選択すると「三点リーダー (⋯)」がポップアップし、
-クリックすることでミニツールバーが展開。LLM（LM StudioなどのローカルLLM / Ollama / Gemini / OpenAI）による実践的文法構文解析とAnkiConnectへのワンクリックカード追加を行います。
+クリックすることでミニツールバーが展開。LLM（LM StudioなどのローカルLLM / Ollama / Gemini / OpenAI）による実践的文法構文解析とAnkiConnectへのワンクリックカード追加を行える。
 
 ## 1. 拡張機能のインストール手順 (Windows)
 
-1. ダウンロードした `ReadAnki-Chrome-Extension.zip` を任意のフォルダに解凍します。
-2. Google Chrome または Microsoft Edge を開きます。
-3. アドレスバーに以下を入力して開きます:
+1. ダウンロードした `ReadAnki-Chrome-Extension.zip` を任意のフォルダに解凍。
+2. Google Chrome または Microsoft Edge を開く。
+3. アドレスバーに以下を入力して開く:
    - Chromeの場合: `chrome://extensions`
    - Edgeの場合: `edge://extensions`
 4. 画面右上（または左メニュー）の **「デベロッパーモード」** をONにします。
-5. **「パッケージ化されていない拡張機能を読み込む」** (Load unpacked) ボタンをクリックします。
-6. 先ほど解凍したフォルダを選択します。
-7. これで拡張機能がブラウザに追加されます！
+5. **「パッケージ化されていない拡張機能を読み込む」** (Load unpacked) ボタンをクリック。
+6. 先ほど解凍したフォルダを選択。
+7. これで拡張機能がブラウザに追加されまっす！
 
 ## 2. 設定の開き方
 
@@ -26,21 +26,21 @@
 **完全ローカル・無料・オフライン** で最先端モデル（Llama 3.2, Qwen 2.5, Gemma 2等）を実行できます。
 
 ### LM Studio でのセットアップ (おすすめ)
-1. Windowsマシンで **LM Studio** を起動します。
-2. お好みのモデル（例: `Llama-3.2-3B-Instruct` や `Qwen2.5-7B-Instruct`）をロードします。
-3. 画面左側の **「Developer (ローカルサーバー)」** アイコンをクリックします。
-4. ポートを `1234` に設定し、**「Start Server」** をクリックします。
+1. Windowsマシンで **LM Studio** を起動
+2. お好みのモデル（例: `Llama-3.2-3B-Instruct` や `Qwen2.5-7B-Instruct`）をロード
+3. 画面左側の **「Developer (ローカルサーバー)」** アイコンをクリック
+4. ポートを `1234` に設定し、**「Start Server」** をクリック
 5. ReadAnkiの設定（または三点リーダー内の⚙️）を開き:
    - プロバイダ: **「OpenAI互換 (ローカルLLM)」** を選択
    - URL: `http://localhost:1234/v1`
    - モデル名: `local-model` (またはロード中のモデルID)
-6. これでWebニュースや英文記事上で、ローカルLLMによる高速な構文解析が利用できます！
+6. これでWebニュースや英文記事上で、ローカルLLMによる高速な構文解析が利用可能！
 
 ## 4. Ollama (ローカルLLM) を利用する場合の注意点
 
-ブラウザからローカルのOllama (`http://localhost:11434`) にリクエストを送る場合、CORS（オリジン間リソース共有）許可が必要です。
+ブラウザからローカルのOllama (`http://localhost:11434`) にリクエストを送る場合、CORS（オリジン間リソース共有）許可が必要。
 
-Windowsのコマンドプロンプトで以下を実行してOllamaを起動してください:
+Windowsのコマンドプロンプトで以下を実行してOllamaを起動:
 
 ```cmd
 set OLLAMA_ORIGINS=chrome-extension://*
@@ -56,11 +56,11 @@ ollama pull llama3.2
 
 ## 5. AnkiデスクトップとAnkiConnectの準備 (Windows)
 
-1. Windows上で **Anki** を起動します。
-2. メニュー「ツール」→「アドオン」を開きます。
-3. 「アドオンを取得」をクリックし、コード **2055492159** (AnkiConnect) を入力してインストールします。
+1. Windows上で **Anki** を起動。
+2. メニュー「ツール」→「アドオン」を開く。
+3. 「アドオンを取得」をクリックし、コード **2055492159** (AnkiConnect) を入力してインストール。
 4. アドオン一覧から `AnkiConnect` を選択し、**「設定」** をクリックします。
-5. `webCorsOriginList` には、Chrome Web Store公開後に確定する拡張IDだけを設定します。`"*"` は設定しないでください:
+5. `webCorsOriginList` には、Chrome Web Store公開後に確定する拡張IDだけを設定。
    ```json
    {
      "apiKey": null,
@@ -108,4 +108,8 @@ ollama pull llama3.2
 
 ## 7. プライバシー
 
-解析を実行したときだけ、選択した英文（とそれを含む1文）または貼り付け画像を、設定で選んだLLMプロバイダへ直接送信します。開発者のサーバーは経由しません。詳細は [プライバシーポリシー](https://sshtorr-rgb.github.io/ReadAnki/privacy.html) を参照してください。
+解析を実行したときだけ、選択した英文（とそれを含む1文）または貼り付け画像を、設定で選んだLLMプロバイダへ直接送信します。開発者のサーバーは経由しません。詳細は [プライバシーポリシー](https://sshtorr-rgb.github.io/ReadAnki-OSS/privacy.html) を参照してください。
+
+## ライセンス
+
+MIT License（[LICENSE](LICENSE)）
