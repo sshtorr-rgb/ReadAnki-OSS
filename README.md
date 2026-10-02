@@ -47,7 +47,7 @@ set OLLAMA_ORIGINS=chrome-extension://*
 ollama serve
 ```
 
-`OLLAMA_ORIGINS=*` は任意のウェブサイトからローカルLLMを呼び出せる設定になるため使用しないでください。
+`OLLAMA_ORIGINS=*` は任意のウェブサイトからローカルLLMを呼び出せる設定になるため、使用しないでください。
 
 モデルの事前ダウンロード（推奨）:
 ```cmd
@@ -60,7 +60,7 @@ ollama pull llama3.2
 2. メニュー「ツール」→「アドオン」を開く。
 3. 「アドオンを取得」をクリックし、コード **2055492159** (AnkiConnect) を入力してインストール。
 4. アドオン一覧から `AnkiConnect` を選択し、**「設定」** をクリックします。
-5. `webCorsOriginList` には、Chrome Web Store公開後に確定する拡張IDだけを設定。
+5. `webCorsOriginList` には、Chrome Web Store公開後に確定する拡張IDだけを設定。（`"*"` にすると、どのWebサイトからでもAnkiが操作可能になるので危険です。設定しないでください。）
    ```json
    {
      "apiKey": null,
