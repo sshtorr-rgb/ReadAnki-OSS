@@ -110,6 +110,10 @@ ollama pull llama3.2
 
 解析を実行したときだけ、選択した英文（とそれを含む1文）または貼り付け画像を、設定で選んだLLMプロバイダへ直接送信します。開発者のサーバーは経由しません。詳細は [プライバシーポリシー](https://sshtorr-rgb.github.io/ReadAnki-OSS/privacy.html) を参照してください。
 
+## 8. FireFox版について
+Firefox版はAndroidのスマホ用に作成しました。Ankidroidにはアドオンとしてカードを作成する機能はないので、Anki追加はないです。
+代わりに、履歴からの単語テスト機能を拡充させています。
+
 ## ライセンス
 
 MIT License（[LICENSE](LICENSE)）
