@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>ReadAnki 設定</title>
+  <style>
+    body { max-width: 620px; margin: 28px auto; font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif; padding: 0 20px; color: #1e293b; background: #f8fafc; }
+    .card { background: #fff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 24px; box-shadow: 0 4px 12px rgba(0,0,0,0.03); }
+    h2 { margin-top: 0; border-bottom: 2px solid #f1f5f9; padding-bottom: 12px; color: #0f172a; font-size: 20px; display: flex; align-items: center; gap: 8px; }
+    .form-group { margin-bottom: 16px; }
+    label { display: block; font-weight: 600; font-size: 13px; margin-bottom: 5px; color: #334155; }
+    input, select { width: 100%; padding: 9px 12px; border: 1px solid #cbd5e1; border-radius: 7px; box-sizing: border-box; font-size: 13px; font-family: inherit; }
+    input[type="checkbox"] { width: auto; padding: 0; margin: 0 6px 0 0; vertical-align: middle; }
+    input:focus, select:focus { outline: none; border-color: #2563eb; box-shadow: 0 0 0 3px rgba(37,99,235,0.15); }
+    .help { font-size: 11.5px; color: #64748b; margin-top: 4px; }
+    .btn { padding: 10px 24px; background: #2563eb; color: #fff; border: none; border-radius: 7px; font-weight: 600; cursor: pointer; font-size: 14px; }
+    .btn:hover { background: #1d4ed8; }
+    .alert { padding: 12px 16px; background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 8px; margin-bottom: 20px; font-size: 12.5px; color: #1e40af; line-height: 1.5; }
+    .site-list { list-style: none; padding: 0; margin: 8px 0 0; }
+    .site-list li { display: flex; justify-content: space-between; align-items: center; padding: 6px 10px; border: 1px solid #e2e8f0; border-radius: 7px; margin-bottom: 6px; font-size: 13px; }
+    .site-list li.empty { color: #64748b; border-style: dashed; }
+    .site-remove { background: none; border: 1px solid #cbd5e1; border-radius: 6px; padding: 3px 10px; cursor: pointer; font-size: 12px; color: #b91c1c; }
+    .section-title { font-size: 13px; font-weight: 700; color: #0f172a; margin-top: 20px; margin-bottom: 10px; border-left: 3px solid #2563eb; padding-left: 8px; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h2><span>⚙️</span> ReadAnki 拡張機能 設定</h2>
+    <div class="section-title">AI / LLM 設定</div>
+    <div class="form-group">
+      <label>LLM プロバイダ</label>
+      <select id="provider">
+        <option value="gemini">Google Gemini (推奨・高速)</option>
+        <option value="local-openai">OpenAI互換 (ローカルLLM / LM Studio / vLLM / LocalAI)</option>
+        <option value="ollama">Ollama (Native API / ローカル)</option>
+        <option value="openai">OpenAI (GPT-4o-mini / クラウド)</option>
+      </select>
+      <div class="help">スクリーンショット解析には、選択したプロバイダで画像入力に対応したモデルが必要です。</div>
+    </div>
+
+    <div class="form-group" id="local-openai-section">
+      <label>OpenAI互換 URL (ローカルLLM)</label>
+      <input type="text" id="localOpenAiUrl" value="http://localhost:1234/v1">
+      <div class="help">localhost以外のHTTPSサーバーを指定した場合は、保存時にそのサーバーへのアクセス許可を求めます。</div>
+      <div class="help">
+        プリセット:
+        <a href="#" data-preset-url="http://localhost:1234/v1">LM Studio (1234)</a> |
+        <a href="#" data-preset-url="http://localhost:11434/v1">Ollama (11434)</a> |
+        <a href="#" data-preset-url="http://localhost:8000/v1">vLLM (8000)</a> |
+        <a href="#" data-preset-url="http://127.0.0.1:52625/v1">FastFlowLM (52625)</a>
+      </div>
+      <label style="margin-top: 10px;">モデル名</label>
+      <input type="text" id="localOpenAiModel" value="local-model">
+      <label style="margin-top: 10px;">APIキー (任意)</label>
+      <input type="password" id="localOpenAiApiKey" placeholder="通常は空欄または任意の文字列">
+    </div>
+
+    <div class="form-group" id="ollama-section">
+      <label>Ollama エンドポイント</label>
+      <input type="text" id="ollamaUrl" value="http://localhost:11434">
+      <div class="help">Windowsでの起動例: <code>set OLLAMA_ORIGINS=chrome-extension://* && ollama serve</code>（<code>*</code> を指定すると任意のウェブサイトからローカルLLMを呼び出せてしまうため非推奨）</div>
+      <label style="margin-top: 10px;">Ollama モデル名</label>
+      <input type="text" id="ollamaModel" value="llama3.2">
+    </div>
+
+    <div class="form-group" id="openai-section">
+      <label>OpenAI APIキー (BYOK)</label>
+      <input type="password" id="openAiApiKey" placeholder="sk-...">
+      <label style="margin-top: 10px;">OpenAI モデル名</label>
+      <input type="text" id="openAiModel" value="gpt-4o-mini">
+    </div>
+
+    <div class="form-group" id="gemini-section">
+      <label>Gemini APIキー (必須・BYOK)</label>
+      <input type="password" id="geminiApiKey" placeholder="Google AI Studioで発行したAPIキー">
+      <div class="help">APIキーはGoogle Gemini APIへ直接送信され、ReadAnkiのプロキシは使用しません。</div>
+      <div class="help">まずはGoogle-AI-Studioにログインし、apiキーを発行し、この上にコピーしましょう。</div>
+      <label style="margin-top: 10px;">Gemini モデル名</label>
+      <input type="text" id="geminiModel" value="gemini-3.1-flash-lite">
+      <div class="help">既定: gemini-3.1-flash-lite。gemini-2.0-flash/2.5-flash/2.5-proは順次シャットダウン予定のため使用不可です。 <a href="https://ai.google.dev/gemini-api/docs/models" target="_blank" rel="noopener noreferrer">Gemini APIのモデル一覧</a> <a href="https://aistudio.google.com/api-keys">Gemini APIキーのURL</a></div>
+    </div>
+
+    <div class="section-title">常に有効にするサイト</div>
+    <div class="form-group">
+      <div class="help" style="margin: 0 0 8px;">登録したサイトでは、毎回「このページで有効化」を押さなくても英文選択時に⋯が表示されます。登録時に、そのサイトだけへのアクセス許可を求めます。それ以外のサイトへはアクセスしません。</div>
+      <div style="display: flex; gap: 8px;">
+        <input type="text" id="site-input" placeholder="例: www.bbc.com または https://www.bbc.com/news">
+        <button class="btn" id="add-site-btn" type="button" style="white-space: nowrap; padding: 9px 16px;">追加</button>
+      </div>
+      <div id="site-msg" class="help" role="status"></div>
+      <ul id="site-list" class="site-list"></ul>
+    </div>
+    <div class="section-title">プライバシーと診断</div>
+    <div class="form-group">
+      <div class="alert">
+        <strong>ReadAnkiが扱うデータ</strong><br>
+        ・解析を実行したとき、選択した英文（最大500文字）とそれを含む1文、または貼り付けた画像を、上で選んだLLMプロバイダへ直接送信します。開発者のサーバーは経由しません。<br>
+        ・送信後の取り扱いには各プロバイダの規約が適用されます（無料枠では製品改善に利用される場合があります）。機密情報・個人情報は解析しないでください。<br>
+        ・画像は保存しません。解析結果は、解析画面で「履歴に保存」を押したときだけこの端末に保存されます（最大500件、履歴画面から削除可）。<br>
+        ・ページへのアクセスは、有効化したタブと、「常に有効にするサイト」に登録したサイトに限られます。<br>
+        同意するまで、LLMプロバイダへの送信は行いません。 <a href="privacy.html" target="_blank">プライバシーポリシーを読む</a>
+      </div>
+      <label><input id="privacyConsent" type="checkbox"> 上記のデータ処理に同意します</label>
+      <label style="margin-top: 12px;"><input id="persistApiKeys" type="checkbox"> APIキーをこのブラウザに保存する</label>
+      <div class="help">オフの場合、APIキーはブラウザを終了するまでの一時保存です。拡張機能ストレージは暗号化されません。</div>
+      <button class="btn" id="copy-diagnostic" type="button" style="margin-top: 12px;">匿名化済み診断情報をコピー</button>
+      <span id="diagnostic-msg" class="help"></span>
+    </div>
+
+    <div class="section-title">単語定義設定</div>
+    <div class="form-group">
+      <label>単語定義の取得方法</label>
+      <select id="wordDefinitionMode">
+        <option value="llm-japanese">① 日本語定義（LLM生成）</option>
+        <option value="llm-paraphrase">② 英語言い換え（LLM生成）</option>
+        <option value="external-link">③ 外部辞書サイトへのリンク</option>
+      </select>
+      <div class="help">語彙の定義をどの方法で表示するか選択します。</div>
+    </div>
+
+    <div style="display: flex; align-items: center; gap: 12px; margin-top: 24px;">
+      <button class="btn" id="save-btn">設定を保存</button>
+      <span id="save-msg" style="font-size: 13px; font-weight: 600; color: #10b981;"></span>
+    </div>
+  </div>
+
+  <script src="options.js"></script>
+</body>
+</html>

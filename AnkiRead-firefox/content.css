@@ -1,0 +1,446 @@
+/* ============================================================
+   ReadAnki Extension UI v3
+   content.css （マニフェストの content_scripts.css として読込）
+   ※v3 モックのカードデザインを .readanki-card-v3 配下に移植
+   ============================================================ */
+
+/* ---------- フローティングツールバー（既存仕様を維持） ---------- */
+.readanki-dots-wrapper {
+  position: absolute;
+  z-index: 2147483647;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans JP", sans-serif;
+  user-select: none;
+}
+
+@keyframes readankiFadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.readanki-dot-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: #0f172a;
+  color: #f8fafc;
+  border: 1px solid rgba(71, 85, 105, 0.8);
+  border-radius: 9999px;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+  animation: readankiFadeIn 0.15s ease-out;
+  transition: all 0.15s ease;
+}
+
+.readanki-dot-trigger:hover {
+  background: #1e293b;
+  transform: scale(1.03);
+}
+
+.readanki-indicator-dot {
+  width: 7px;
+  height: 7px;
+  background: #3b82f6;
+  border-radius: 50%;
+}
+
+.readanki-dots-symbol {
+  font-size: 14px;
+  line-height: 1;
+  font-weight: bold;
+  letter-spacing: 1px;
+}
+
+.readanki-dots-tag {
+  font-size: 11px;
+  color: #94a3b8;
+}
+
+.readanki-toolbar-menu {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  background: #0f172a;
+  border: 1px solid rgba(71, 85, 105, 0.8);
+  border-radius: 10px;
+  padding: 4px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.28);
+  animation: readankiFadeIn 0.15s ease-out;
+}
+
+.readanki-btn-mini {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: transparent;
+  border: none;
+  outline: none;
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #cbd5e1;
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+
+.readanki-btn-mini:hover {
+  background: #334155;
+  color: #ffffff;
+}
+
+.readanki-btn-mini.readanki-btn-primary {
+  background: linear-gradient(135deg, #2563eb, #4f46e5);
+  color: #ffffff;
+}
+
+.readanki-btn-mini.readanki-btn-primary:hover {
+  background: linear-gradient(135deg, #1d4ed8, #4338ca);
+}
+
+.readanki-image-paste {
+  position: fixed;
+  z-index: 2147483647;
+  width: 300px;
+  padding: 20px;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 14px;
+  box-shadow: 0 18px 45px rgba(15, 23, 42, .22);
+  color: #1e293b;
+  font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Noto Sans JP", sans-serif;
+  text-align: center;
+}
+.readanki-image-paste .close-x { position: absolute; top: 10px; right: 12px; border: 0; background: transparent; color: #64748b; font-size: 20px; cursor: pointer; }
+.rk-image-paste-icon { font-size: 25px; margin-bottom: 6px; }
+.readanki-image-paste strong { display: block; font-size: 13px; }
+.readanki-image-paste p { margin: 8px 0 12px; color: #64748b; font-size: 11px; line-height: 1.55; }
+.readanki-image-paste kbd { padding: 1px 4px; border: 1px solid #cbd5e1; border-radius: 4px; background: #f8fafc; font-size: 10px; }
+.rk-image-paste-target { padding: 14px 8px; border: 1px dashed #93c5fd; border-radius: 8px; background: #eff6ff; color: #1d4ed8; font-size: 12px; outline: none; }
+.rk-image-paste-target:focus { border-color: #2563eb; box-shadow: 0 0 0 3px rgba(37, 99, 235, .15); }
+.readanki-image-paste small { display: block; margin-top: 8px; color: #94a3b8; font-size: 10px; line-height: 1.4; text-align: left; }
+
+.readanki-btn-collapse, .readanki-btn-close-trigger {
+  padding: 4px 6px;
+  color: #94a3b8;
+}
+
+.readanki-sep {
+  width: 1px;
+  height: 14px;
+  background: #334155;
+  margin: 0 2px;
+}
+
+/* ============================================================
+   v3 カード（readanki_ui_v3.html からの移植。クラス名は契約）
+   ============================================================ */
+.readanki-card-v3 {
+  --ink: #14181f;
+  --ink-soft: #4b5568;
+  --muted: #8a93a3;
+  --paper: #ffffff;
+  --line: #e6e9ee;
+  --canvas: #eef1f6;
+  --role-s: #0f766e;   /* 主語: 緑系, 一本下線 */
+  --role-v: #1f3a93;   /* 動詞: 藍色, 二重下線 */
+  --role-o: #b45309;   /* 目的語: 橙系, 破線下線 */
+  --role-c: #7c3aed;   /* 補語: 紫系, 波線下線 */
+  --role-s-8: rgba(15, 118, 110, .08);
+  --role-v-8: rgba(31, 58, 147, .08);
+
+  position: fixed;
+  z-index: 2147483647;
+  width: 460px;
+  min-width: 320px;
+  min-height: 200px;
+  max-width: 96vw;
+  max-height: 86vh;
+  overflow: auto;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  box-shadow: 0 22px 50px rgba(20, 24, 31, .16);
+  font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Noto Sans JP", Roboto, sans-serif;
+  font-size: 12.5px;
+  color: var(--ink);
+  animation: readankiFadeIn 0.18s ease-out;
+}
+.readanki-card-v3 * { box-sizing: border-box; }
+
+.readanki-card-v3 .card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 13px 20px;
+  border-bottom: 1px solid var(--line);
+  position: sticky;
+  top: 0;
+  background: var(--paper);
+  z-index: 2;
+}
+.readanki-card-v3 .card-header { cursor: move; user-select: none; }
+.readanki-card-v3 .card-resize {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 18px;
+  height: 18px;
+  cursor: nwse-resize;
+  touch-action: none;
+  border-radius: 0 0 16px 0;
+  background:
+    linear-gradient(135deg, transparent 50%, #c7cdd5 50%) 0 0 / 6px 6px,
+    linear-gradient(135deg, transparent 50%, #c7cdd5 50%) 100% 100% / 6px 6px;
+}
+.readanki-card-v3 .brand { display: flex; align-items: center; gap: 7px; font-size: 13px; font-weight: 700; }
+.readanki-card-v3 .brand .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--role-v); }
+.readanki-card-v3 .brand .provider { font-size: 10.5px; font-weight: 500; color: var(--muted); margin-left: 2px; }
+.readanki-card-v3 .close-x {
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 2px 4px;
+}
+.readanki-card-v3 .close-x:hover { color: var(--ink); }
+
+.readanki-card-v3 .card-body {
+  padding: 20px 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.readanki-card-v3 .zone-label {
+  font-size: 10.5px;
+  color: var(--muted);
+  margin-bottom: 10px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.readanki-card-v3 .zone-label .ln { flex: 1; height: 1px; background: var(--line); }
+
+.readanki-card-v3 .idxb {
+  display: inline-block;
+  font-size: 10px;
+  color: var(--muted);
+  margin-right: 2px;
+  vertical-align: 2px;
+}
+
+/* ---- Zone 1: 読む ---- */
+.readanki-card-v3 .sentence {
+  font-family: Georgia, "Iowan Old Style", "Hiragino Mincho ProN", serif;
+  font-size: 14.5px;
+  line-height: 2.15;
+  color: var(--ink);
+}
+.readanki-card-v3 .svoc-wrap {
+  position: relative;
+  display: inline-block;
+  padding-top: 17px;
+  cursor: pointer;
+}
+.readanki-card-v3 .svoc-label {
+  position: absolute;
+  top: -2px;
+  left: 14px;
+  font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", sans-serif;
+  font-size: 14px;
+  font-weight: 800;
+}
+.readanki-card-v3 .role-S { text-decoration-line: underline; text-decoration-style: solid;  text-decoration-thickness: 2.5px; text-underline-offset: 5px; color: var(--role-s); }
+.readanki-card-v3 .role-V { text-decoration-line: underline; text-decoration-style: double; text-decoration-thickness: 3px;   text-underline-offset: 5px; color: var(--role-v); }
+.readanki-card-v3 .role-O { text-decoration-line: underline; text-decoration-style: dashed; text-decoration-thickness: 2px;   text-underline-offset: 5px; color: var(--role-o); }
+.readanki-card-v3 .role-C { text-decoration-line: underline; text-decoration-style: wavy;   text-decoration-thickness: 2px;   text-underline-offset: 5px; color: var(--role-c); }
+.readanki-card-v3 .svoc-wrap.role-S .svoc-label { color: var(--role-s); }
+.readanki-card-v3 .svoc-wrap.role-V .svoc-label { color: var(--role-v); }
+.readanki-card-v3 .svoc-wrap.role-O .svoc-label { color: var(--role-o); }
+.readanki-card-v3 .svoc-wrap.role-C .svoc-label { color: var(--role-c); }
+
+.readanki-card-v3 .schunk {
+  cursor: pointer;
+  border-radius: 3px;
+  padding: 0 1px;
+  transition: background .12s ease;
+}
+.readanki-card-v3 .schunk:hover { background: #f1f3f6; }
+.readanki-card-v3 [data-idx].linked {
+  background: #eef1f6;
+  box-shadow: 0 0 0 1px var(--muted);
+  border-radius: 4px;
+}
+
+.readanki-card-v3 .gloss {
+  margin-top: 14px;
+  padding: 2px 0 2px 12px;
+  border-left: 2px solid var(--line);
+  font-size: 12.5px;
+  line-height: 1.65;
+  color: var(--ink-soft);
+}
+
+.readanki-card-v3 .legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+.readanki-card-v3 .legend-item { display: flex; align-items: center; gap: 6px; font-size: 10.5px; color: var(--ink-soft); }
+.readanki-card-v3 .legend-swatch { width: 22px; height: 0; border-top-width: 2.5px; }
+.readanki-card-v3 .sw-S { border-top-style: solid; border-top-color: var(--role-s); }
+.readanki-card-v3 .sw-V { border-top-style: double; border-top-width: 3px; border-top-color: var(--role-v); }
+.readanki-card-v3 .sw-O { border-top-style: dashed; border-top-color: var(--role-o); }
+.readanki-card-v3 .sw-C { border-top-style: solid; border-image: none; position: relative; }
+.readanki-card-v3 .sw-C::before {
+  content: "";
+  display: block;
+  width: 22px;
+  height: 4px;
+  background:
+    radial-gradient(circle 3px at 3px 1px, transparent 2px, var(--role-c) 2.2px),
+    radial-gradient(circle 3px at 9px 4px, transparent 2px, var(--role-c) 2.2px);
+  background-size: 6px 4px;
+  background-repeat: repeat-x;
+}
+
+/* ---- 下部 ---- */
+.readanki-card-v3 .grammar-note {
+  margin-top: 2px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+  font-size: 11.5px;
+  line-height: 1.75;
+  color: var(--ink-soft);
+  white-space: pre-line;
+}
+.readanki-card-v3 .rk-vocabulary {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+.readanki-card-v3 .rk-vocabulary .zone-label { margin-bottom: 8px; }
+.readanki-card-v3 .rk-vocabulary-list { display: flex; flex-direction: column; gap: 6px; }
+.readanki-card-v3 .rk-vocabulary-row {
+  display: grid;
+  grid-template-columns: auto minmax(90px, 1fr) minmax(0, 1.6fr) auto;
+  align-items: baseline;
+  gap: 8px;
+  padding: 7px 9px;
+  border-radius: 7px;
+  background: #f8fafc;
+  font-size: 11.5px;
+}
+.readanki-card-v3 .rk-unknown-toggle {
+  align-self: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: #fff;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+}
+.readanki-card-v3 .rk-unknown-toggle:hover { border-color: var(--muted); }
+.readanki-card-v3 .rk-unknown-toggle.is-unknown { background: #fff7ed; border-color: #f59e0b; color: #b45309; }
+.readanki-card-v3 .rk-unknown-toggle:disabled { opacity: .4; cursor: default; }
+.readanki-card-v3 .rk-vocabulary-word { font-weight: 700; color: var(--ink); overflow-wrap: anywhere; }
+.readanki-card-v3 .rk-vocabulary-meaning { color: var(--ink-soft); overflow-wrap: anywhere; }
+.readanki-card-v3 .rk-vocabulary-pos { color: var(--muted); font-size: 10.5px; white-space: nowrap; }
+.readanki-card-v3 .footer-actions { display: flex; justify-content: flex-end; margin-top: 4px; }
+.readanki-card-v3 .rk-actions { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
+.readanki-card-v3 .rk-save-history-btn {
+  background: none;
+  border: 1px solid var(--muted);
+  color: var(--ink-soft);
+  padding: 6px 12px;
+  border-radius: 8px;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.readanki-card-v3 .rk-save-history-btn:disabled { opacity: .7; cursor: default; }
+
+.readanki-card-v3 .rk-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 26px 0;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+.readanki-card-v3 .rk-spinner {
+  width: 24px;
+  height: 24px;
+  border: 3px solid var(--line);
+  border-top-color: var(--role-v);
+  border-radius: 50%;
+  animation: readankiSpin 0.8s linear infinite;
+}
+@keyframes readankiSpin { to { transform: rotate(360deg); } }
+.readanki-card-v3 .rk-error { color: #b91c1c; font-size: 12px; line-height: 1.6; }
+.readanki-card-v3 .rk-error small { color: var(--ink-soft); }
+.readanki-card-v3 .rk-btn-sm {
+  background: var(--role-v);
+  color: #fff;
+  border: none;
+  padding: 5px 12px;
+  border-radius: 6px;
+  font-weight: 600;
+  cursor: pointer;
+  font-size: 11.5px;
+  margin-top: 6px;
+}
+
+/* ---- ツールチップ（v3 の .tooltip を移植） ---- */
+.readanki-tip {
+  position: fixed;
+  z-index: 2147483647;
+  width: 260px;
+  background: var(--ink, #14181f);
+  color: #f4f6fa;
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 12px;
+  line-height: 1.6;
+  box-shadow: 0 14px 30px rgba(0, 0, 0, .25);
+  display: none;
+  font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Noto Sans JP", Roboto, sans-serif;
+}
+.readanki-tip::after {
+  content: "";
+  position: absolute;
+  top: -5px;
+  left: 20px;
+  width: 10px;
+  height: 10px;
+  background: var(--ink, #14181f);
+  transform: rotate(45deg);
+}
+.readanki-tip .t-word { font-size: 11px; font-weight: 700; color: #9db4f0; margin-bottom: 3px; }
+.readanki-tip .t-general { margin-bottom: 6px; }
+.readanki-tip .t-context { color: #c2c9d6; }
+
+/* スマホ（Firefox for Android）など狭い画面向け */
+@media (max-width: 520px) {
+  .readanki-toolbar-menu { flex-wrap: wrap; max-width: calc(100vw - 20px); }
+  .readanki-card-v3 { width: calc(100vw - 20px); min-width: 0; max-height: 80vh; font-size: 13.5px; }
+}
+
+/* タッチ操作向け: 押しやすい大きさにする */
+@media (pointer: coarse) {
+  .readanki-btn-mini { padding: 8px 10px; min-height: 36px; }
+  .readanki-card-v3 .rk-save-history-btn { min-height: 40px; }
+  .readanki-card-v3 .rk-unknown-toggle { min-width: 32px; min-height: 32px; }
+}

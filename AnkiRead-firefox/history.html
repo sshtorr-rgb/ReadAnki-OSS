@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ReadAnki 解析履歴</title>
+  <link rel="stylesheet" href="history.css">
+</head>
+<body>
+  <main class="app-shell">
+    <header class="page-header">
+      <div>
+        <p class="eyebrow">READANKI</p>
+        <h1>解析履歴</h1>
+        <p class="subtitle">AIで解析した英文を、いつでも見返せます。</p>
+      </div>
+      <button id="clear-history" class="button button-danger" type="button">履歴をすべて削除</button>
+    </header>
+
+    <section class="toolbar" aria-label="履歴の検索">
+      <label class="search-box" for="search-input">
+        <span aria-hidden="true">⌕</span>
+        <input id="search-input" type="search" placeholder="対象フレーズ・文の和訳で検索" autocomplete="off">
+      </label>
+      <button id="open-quiz" class="button" type="button" style="display:none;">🧠 未知語テスト (<span id="quiz-count">0</span>)</button>
+      <button id="generate-sentence-quiz" class="button" type="button" style="display:none;">📝 例文テスト生成 (15語)</button>
+      <p id="history-count" class="history-count"></p>
+    </section>
+
+    <div id="quiz-overlay" class="quiz-overlay" style="display:none;">
+      <div class="quiz-card">
+        <div class="quiz-header">
+          <span id="quiz-progress" class="quiz-progress"></span>
+          <button id="quiz-close" class="quiz-close" type="button" aria-label="閉じる">&times;</button>
+        </div>
+        <div id="quiz-body" class="quiz-body"></div>
+      </div>
+    </div>
+
+    <div id="history-list" class="history-list" aria-live="polite"></div>
+    <template id="empty-template">
+      <section class="empty-state">
+        <div class="empty-icon">📘</div>
+        <h2>まだ解析履歴はありません</h2>
+        <p>Webページ上で英文を選択して「解説」を実行すると、ここに保存されます。</p>
+      </section>
+    </template>
+  </main>
+  <script src="history.js"></script>
+</body>
+</html>
