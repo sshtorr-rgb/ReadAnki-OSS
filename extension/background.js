@@ -30,6 +30,7 @@ chrome.runtime.onInstalled.addListener((details) => {
     }
   });
   syncAllowedSiteScripts();
+  migrateUnknownWordsToWordbook();
   chrome.contextMenus.removeAll(() => {
     chrome.contextMenus.create({
       id: 'readanki-explain-selection',
@@ -48,7 +49,7 @@ async function ensureInjected(tabId) {
   });
   if (alreadyInjected) return;
   await chrome.scripting.insertCSS({ target: { tabId }, files: ['content.css'] });
-  await chrome.scripting.executeScript({ target: { tabId }, files: ['content.js'] });
+  await chrome.scripting.executeScript({ target: { tabId }, files: ['tts.js', 'content.js'] });
 }
 
 // ============================================================
@@ -83,7 +84,7 @@ function syncAllowedSiteScripts() {
     await chrome.scripting.registerContentScripts([{
       id: ALLOWED_SITES_SCRIPT_ID,
       matches,
-      js: ['content.js'],
+      js: ['tts.js', 'content.js'],
       css: ['content.css'],
       runAt: 'document_idle',
       persistAcrossSessions: true,
@@ -111,7 +112,10 @@ chrome.permissions.onAdded.addListener(() => syncAllowedSiteScripts());
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area === 'local' && changes.allowedSites) syncAllowedSiteScripts();
 });
-chrome.runtime.onStartup.addListener(() => syncAllowedSiteScripts());
+chrome.runtime.onStartup.addListener(() => {
+  syncAllowedSiteScripts();
+  migrateUnknownWordsToWordbook();
+});
 
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   if (info.menuItemId !== 'readanki-explain-selection' || !tab?.id) return;
@@ -153,11 +157,6 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
   }
 
-  if (request.action === 'toggleUnknownWord') {
-    Promise.resolve(handleToggleUnknownWord(request)).then(sendResponse);
-    return true;
-  }
-
   if (request.action === 'addToAnki') {
     handleAddToAnki(request).then(sendResponse);
     return true;
@@ -173,13 +172,32 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
   }
 
+  if (request.action === 'translateClozePart') {
+    handleTranslateClozePart(request).then(sendResponse);
+    return true;
+  }
+
   if (request.action === 'getParaphrase') {
     handleGetParaphrase(request).then(sendResponse);
     return true;
   }
 
-  if (request.action === 'generateExampleSentences') {
-    handleGenerateExampleSentences(request).then(sendResponse);
+  if (request.action === 'addWordbookWord') {
+    // ページ上の「＋単語」ボタン（content script）からのみ受け付ける。記事のURLは送信元のフレームから取る。
+    if (!sender.tab || !sender.url) return false;
+    handleAddWordbookWord(request, sender.url).then(sendResponse);
+    return true;
+  }
+
+  if (request.action === 'defineWordbookWords') {
+    handleDefineWordbookWords(request).then(sendResponse);
+    return true;
+  }
+
+  if (request.action === 'openWordbook') {
+    const page = typeof request.page === 'string' ? request.page : '';
+    chrome.tabs.create({ url: chrome.runtime.getURL(`wordbook.html${page ? `#page=${encodeURIComponent(page)}` : ''}`) });
+    sendResponse({ success: true });
     return true;
   }
 
@@ -214,6 +232,14 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
   if (request.action === 'getDiagnostic') {
     getDiagnostic().then(sendResponse);
+    return true;
+  }
+
+  if (request.action === 'synthesizeSpeech') {
+    // 未保存の設定での試聴は、拡張機能のページ（設定画面）からだけ受け付ける。
+    // （設定画面はタブで開くため sender.tab の有無ではなく、送信元URLが拡張機能自身のページかで判定する）
+    const fromExtensionPage = sender.id === chrome.runtime.id && String(sender.url || '').startsWith(chrome.runtime.getURL(''));
+    handleSynthesizeSpeech(request, fromExtensionPage ? request.config : null).then(sendResponse);
     return true;
   }
 });
@@ -273,6 +299,163 @@ async function getDiagnostic() {
   return { success: true, version: chrome.runtime.getManifest().version, lastDiagnostic };
 }
 
+// ============================================================
+// 外部TTS（設定で選んだときだけ）: 読み上げる英文だけを選んだサービスへ送り、音声を返す。
+// 同じ文の再生成（再課金）を避けるため、メモリ内に最近の音声だけを保持する（ディスクには保存しない）。
+// ============================================================
+const TTS_DEFAULTS = {
+  engine: 'browser',
+  accent: 'us',
+  openAiTtsVoice: 'coral',
+  openAiTtsModel: 'gpt-4o-mini-tts',
+  geminiTtsVoice: 'Kore',
+  geminiTtsModel: 'gemini-3.8-flash-tts',
+  localTtsUrl: 'http://localhost:8880/v1',
+  localTtsModel: 'kokoro',
+  localTtsVoice: 'af_heart',
+};
+const TTS_ACCENT_NAMES = { us: 'American', gb: 'British', au: 'Australian', in: 'Indian' };
+const TTS_ENGINE_LABELS = { openai: 'OpenAI', gemini: 'Gemini', local: 'ローカルTTS' };
+const TTS_CACHE_LIMIT = 30;
+const ttsCache = new Map();
+
+function bytesToBase64(bytes) {
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+  }
+  return btoa(binary);
+}
+
+function ttsStyle(accent, slow) {
+  const accentName = TTS_ACCENT_NAMES[accent] || TTS_ACCENT_NAMES.us;
+  return `Speak in a clear, natural ${accentName} English accent${slow ? ', slowly and carefully for a language learner' : ''}.`;
+}
+
+async function fetchAudioBytes(res, label) {
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    let message = res.statusText;
+    try { message = JSON.parse(body)?.error?.message || message; } catch {}
+    throw new Error(`${label} の読み上げエラー (HTTP ${res.status}): ${message}`);
+  }
+  return new Uint8Array(await res.arrayBuffer());
+}
+
+async function synthesizeOpenAi(text, tts, slow, apiKey) {
+  if (!apiKey) throw new Error('OpenAI APIキーが設定されていません（設定画面のAI設定で入力してください）。');
+  const model = String(tts.openAiTtsModel || TTS_DEFAULTS.openAiTtsModel).trim();
+  const body = { model, voice: tts.openAiTtsVoice || TTS_DEFAULTS.openAiTtsVoice, input: text, response_format: 'mp3' };
+  if (slow) body.speed = 0.8;
+  if (!/^tts-1/.test(model)) body.instructions = ttsStyle(tts.accent, slow);
+  const res = await fetch('https://api.openai.com/v1/audio/speech', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify(body),
+  });
+  return { format: 'encoded', data: bytesToBase64(await fetchAudioBytes(res, 'OpenAI')) };
+}
+
+function findGeminiAudio(json) {
+  const outputs = [];
+  for (const step of Array.isArray(json?.steps) ? json.steps : []) {
+    for (const item of Array.isArray(step?.content) ? step.content : []) {
+      if (item?.type === 'audio' && item.data) outputs.push({ data: item.data, mimeType: item.mime_type || item.mimeType });
+    }
+  }
+  if (json?.output_audio?.data) outputs.push({ data: json.output_audio.data, mimeType: json.output_audio.mime_type });
+  for (const part of json?.candidates?.[0]?.content?.parts || []) {
+    if (part?.inlineData?.data) outputs.push({ data: part.inlineData.data, mimeType: part.inlineData.mimeType });
+  }
+  return outputs[outputs.length - 1] || null;
+}
+
+async function synthesizeGemini(text, tts, slow, apiKey) {
+  if (!apiKey) throw new Error('Gemini APIキーが設定されていません（設定画面のAI設定で入力してください）。');
+  const res = await fetch('https://generativelanguage.googleapis.com/v1beta/interactions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
+    body: JSON.stringify({
+      model: String(tts.geminiTtsModel || TTS_DEFAULTS.geminiTtsModel).trim(),
+      input: [{
+        type: 'user_input',
+        content: [{
+          type: 'text',
+          text,
+          annotations: [{ type: 'speech_metadata', style: ttsStyle(tts.accent, slow) }],
+        }],
+      }],
+      response_format: { type: 'audio', mime_type: 'audio/wav' },
+      generation_config: { speech_config: [{ voice: tts.geminiTtsVoice || TTS_DEFAULTS.geminiTtsVoice }] },
+    }),
+  });
+  const raw = await res.text();
+  let json;
+  try { json = JSON.parse(raw); } catch { json = null; }
+  if (!res.ok || !json) {
+    throw new Error(`Gemini の読み上げエラー (HTTP ${res.status}): ${json?.error?.message || res.statusText}`);
+  }
+  const audio = findGeminiAudio(json);
+  if (!audio) throw new Error('Geminiから音声が返されませんでした。読み上げモデル名を確認してください。');
+  const mimeType = String(audio.mimeType || '').toLowerCase();
+  if (/l16|pcm/.test(mimeType)) {
+    const rate = Number((mimeType.match(/rate=(\d+)/) || [])[1]) || 24000;
+    return { format: 'pcm16', data: audio.data, sampleRate: rate };
+  }
+  return { format: 'encoded', data: audio.data };
+}
+
+async function synthesizeLocal(text, tts, slow) {
+  const base = localEndpointUrl(tts.localTtsUrl, TTS_DEFAULTS.localTtsUrl, 'ローカルTTS');
+  const url = /\/audio\/speech\/?$/.test(base.pathname)
+    ? base.toString()
+    : `${base.toString().replace(/\/+$/, '')}/audio/speech`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: tts.localTtsModel || TTS_DEFAULTS.localTtsModel,
+      voice: tts.localTtsVoice || TTS_DEFAULTS.localTtsVoice,
+      input: text,
+      response_format: 'mp3',
+      speed: slow ? 0.8 : 1,
+    }),
+  });
+  return { format: 'encoded', data: bytesToBase64(await fetchAudioBytes(res, 'ローカルTTS')) };
+}
+
+async function handleSynthesizeSpeech(request, configOverride) {
+  const text = clampText(request.text, MAX_TARGET_CHARS);
+  if (!text) return { success: false, error: '読み上げる英文がありません' };
+  const { ttsConfig = {} } = await chrome.storage.local.get('ttsConfig');
+  const override = configOverride && typeof configOverride === 'object' ? configOverride : {};
+  const tts = { ...TTS_DEFAULTS, ...ttsConfig, ...override };
+  const slow = request.slow === true;
+  if (!TTS_ENGINE_LABELS[tts.engine]) return { success: false, error: 'ブラウザ音声が選ばれています' };
+  try {
+    await requirePrivacyConsent();
+    const voiceKey = { openai: [tts.openAiTtsModel, tts.openAiTtsVoice], gemini: [tts.geminiTtsModel, tts.geminiTtsVoice], local: [tts.localTtsUrl, tts.localTtsModel, tts.localTtsVoice] }[tts.engine];
+    const cacheKey = JSON.stringify([tts.engine, ...voiceKey, tts.accent, slow, text]);
+    if (ttsCache.has(cacheKey)) {
+      const cached = ttsCache.get(cacheKey);
+      ttsCache.delete(cacheKey);
+      ttsCache.set(cacheKey, cached);
+      return { success: true, cached: true, ...cached };
+    }
+    const config = await getLlmConfig();
+    let audio;
+    if (tts.engine === 'openai') audio = await synthesizeOpenAi(text, tts, slow, String(config.openAiApiKey || '').trim());
+    else if (tts.engine === 'gemini') audio = await synthesizeGemini(text, tts, slow, String(config.geminiApiKey || '').trim());
+    else audio = await synthesizeLocal(text, tts, slow);
+    ttsCache.set(cacheKey, audio);
+    while (ttsCache.size > TTS_CACHE_LIMIT) ttsCache.delete(ttsCache.keys().next().value);
+    return { success: true, ...audio };
+  } catch (error) {
+    await recordDiagnostic('tts', tts.engine, error.message);
+    return { success: false, error: error.message };
+  }
+}
+
 function escapeHtml(value) {
   return String(value ?? '')
     .replace(/&/g, '&amp;')
@@ -314,8 +497,9 @@ Analyze the target English sentence or phrase and return STRICT JSON with this s
 {
   "targetPhrase": string,
   "partOfSpeech": "品詞または構文名",
-  "sentenceTranslation": "文全体の自然な和訳",
-  "structureBreakdown": [{"chunk": "英文", "role": "S/V/O/C/M", "note": "解説"}],
+  "targetTranslation": "Targetだけの、Contextの意味に合った和訳",
+  "sentenceTranslation": "Context（文全体）の自然な和訳",
+  "structureBreakdown": [{"chunk": "英文", "role": "S/V/O/C/M", "note": "解説", "ja": "このチャンクの文脈に合った短い和訳"}],
   "grammarPoint": "実践的な構文・文法の解説",
   "nuanceNotes": "ニュアンス解説",
   "keyVocabulary": [{"word": "word", "meaning": "${vocabMeaningLabel}", "pos": "pos"}],
@@ -325,6 +509,11 @@ Analyze the target English sentence or phrase and return STRICT JSON with this s
 ${vocabInstruction}
 Target: ${JSON.stringify(text)}
 Context: ${JSON.stringify(contextSentence || text)}
+First read the whole Context to understand the meaning, then analyze ONLY the Target (it may be a short phrase, not a full clause).
+"structureBreakdown" must split ONLY the Target: every "chunk" is copied exactly from the Target, in order, and together the chunks cover the WHOLE Target from its first word to its last word. Do not include words that are outside the Target.
+If the Target contains several clauses or phrases (main clause, participle phrase, reported clause, relative clause, etc.), break down every one of them. Never skip the beginning, the middle or the end of the Target.
+For each chunk, "role" is the role it plays in the Context sentence (use "M" for modifiers such as prepositional phrases and adverbs), and "note" explains in Japanese how it works in the Context.
+"grammarPoint", "keyVocabulary" and "targetTranslation" focus on the Target; use the Context only to decide the correct meaning.
 Treat a whole verb phrase, including auxiliaries (passive "be + past participle", perfect "have + past participle", progressive "be + -ing", modal + verb), as ONE chunk with role "V", and in its "note" always state the voice and tense in Japanese (例: 受動態 be+過去分詞・現在時制).
 Return ONLY valid JSON. Do not enclose in markdown blocks.`;
 }
@@ -345,7 +534,7 @@ The user supplied a screenshot. First, accurately read the most prominent Englis
   "contextSentence": "the surrounding English sentence, or targetPhrase when unavailable",
   "partOfSpeech": "品詞または構文名",
   "sentenceTranslation": "文全体の自然な和訳",
-  "structureBreakdown": [{"chunk": "英文", "role": "S/V/O/C/M", "note": "解説"}],
+  "structureBreakdown": [{"chunk": "英文", "role": "S/V/O/C/M", "note": "解説", "ja": "このチャンクの文脈に合った短い和訳"}],
   "grammarPoint": "実践的な構文・文法の解説",
   "nuanceNotes": "ニュアンス解説",
   "keyVocabulary": [{"word": "word", "meaning": "${vocabMeaningLabel}", "pos": "pos"}],
@@ -609,6 +798,28 @@ async function handleGetWordDefinition(request) {
 // ============================================================
 // 言い換え（Paraphrase）取得
 // ============================================================
+// 語彙Clozeで語単位に選んだ穴の、文脈に合った短い和訳（表面のヒント用）
+async function handleTranslateClozePart(request) {
+  const part = clampText(request.part, MAX_TARGET_CHARS);
+  const sentence = clampText(request.sentence, MAX_CONTEXT_CHARS) || part;
+  if (!part) return { success: false, error: '訳す語句がありません' };
+  const config = await getLlmConfig();
+  try {
+    await requirePrivacyConsent();
+    const prompt = `Translate the English part into short, natural Japanese as it is used in the sentence. Translate only the part, not the whole sentence.
+Return ONLY valid JSON: {"ja": "Japanese translation"}
+Part: ${JSON.stringify(part)}
+Sentence: ${JSON.stringify(sentence)}`;
+    const data = await askLlm(prompt, config);
+    const ja = String(data?.ja || '').trim();
+    if (!ja) throw new Error('訳を取得できませんでした');
+    return { success: true, ja };
+  } catch (err) {
+    await recordDiagnostic('cloze-hint', config.provider, err.message);
+    return { success: false, error: err.message };
+  }
+}
+
 async function handleGetParaphrase(request) {
   const sentence = clampText(request.sentence, MAX_CONTEXT_CHARS);
   if (!sentence) return { success: false, error: '英文が指定されていません' };
@@ -625,8 +836,6 @@ async function handleGetParaphrase(request) {
   }
 }
 
-// ============================================================
-// 例文生成（15語グループ用）
 // ============================================================
 async function handleGenerateExampleSentences(request) {
   const { words } = request;
@@ -652,6 +861,150 @@ async function handleGenerateExampleSentences(request) {
 // ============================================================
 // 1回目: 解説 ＋ 履歴保存
 // ============================================================
+// ============================================================
+// 構文分解が選択範囲の全体を覆っているかの確認（LLMが一部の節だけを返すことがあるため）
+// AIは引用符（“ ” と "）・句読点・大文字小文字・空白を変えて返すことがあるため、
+// 語（英数字）の並びだけで照合し、元の文字位置に戻す。
+// ============================================================
+function wordSkeleton(value) {
+  const source = String(value || '');
+  let text = '';
+  const map = [];
+  let pendingGap = false;
+  for (let i = 0; i < source.length; i++) {
+    const ch = source[i];
+    if (/[\p{L}\p{N}]/u.test(ch)) {
+      if (pendingGap && text) { text += ' '; map.push(i); }
+      text += ch.toLowerCase();
+      map.push(i);
+      pendingGap = false;
+    } else {
+      pendingGap = true;
+    }
+  }
+  return { text, map };
+}
+
+// 範囲の中で片方だけになった引用符・括弧を、すぐ隣にある相方まで広げて閉じる（例: “clearly … actor → “clearly … actor”）。
+function balanceSpan(source, start, end) {
+  const count = (re) => (source.slice(start, end).match(re) || []).length;
+  for (const [open, close] of [['“', '”'], ['‘', '’'], ['[', ']'], ['(', ')']]) {
+    const opens = count(new RegExp('\\' + open, 'g'));
+    const closes = count(new RegExp('\\' + close, 'g'));
+    if (opens > closes) {
+      const next = source.slice(end, end + 2).match(new RegExp('^[,.;:!?]?\\' + close));
+      if (next) end += next[0].length;
+    } else if (closes > opens && source[start - 1] === open) {
+      start -= 1;
+    }
+  }
+  if (count(/"/g) % 2 === 1) {
+    const next = source.slice(end, end + 2).match(/^[,.;:!?]?"/);
+    if (next) end += next[0].length;
+    else if (source[start - 1] === '"') start -= 1;
+  }
+  return { start, end };
+}
+
+// text の中で、chunks を順に（見つからなければ先頭から）探し、重ならない文字範囲を返す。
+// 先頭・末尾の引用符は、チャンク側にも引用符があれば範囲に含める。
+function locateChunks(text, chunks, fromIndex = 0) {
+  const source = String(text || '');
+  const base = wordSkeleton(source);
+  const padded = ` ${base.text} `;
+  const startSkel = base.map.findIndex((orig) => orig >= fromIndex);
+  let cursor = startSkel === -1 ? 0 : startSkel;
+  const spans = [];
+  for (const raw of chunks) {
+    const chunk = wordSkeleton(raw).text;
+    if (!chunk) { spans.push(null); continue; }
+    const needle = ` ${chunk} `;
+    const overlaps = (st, en) => spans.some((sp) => sp && st < sp.end && en > sp.start);
+    const toSpan = (pos) => {
+      let start = base.map[pos];
+      let end = base.map[pos + chunk.length - 1] + 1;
+      const rawText = String(raw).trim();
+      // チャンクが引用符で囲まれていれば、元の文の引用符（直後の , や . を挟む場合も）を含める
+      if (/^["“‘]/.test(rawText) && /["“‘]/.test(source[start - 1] || '')) start -= 1;
+      if (/["”’]$/.test(rawText)) {
+        const close = source.slice(end, end + 2).match(/^[,.;:!?]?["”’]/);
+        if (close) end += close[0].length;
+      }
+      return balanceSpan(source, start, end);
+    };
+    let found = null;
+    for (const from of [cursor, 0]) {
+      let pos = padded.indexOf(needle, from);
+      while (pos !== -1) {
+        const span = toSpan(pos);
+        if (!overlaps(span.start, span.end)) { found = { span, next: pos + chunk.length }; break; }
+        pos = padded.indexOf(needle, pos + 1);
+      }
+      if (found) break;
+    }
+    if (found) {
+      spans.push(found.span);
+      cursor = found.next;
+    } else {
+      spans.push(null);
+    }
+  }
+  return spans;
+}
+
+// 対象テキストのうち、どのチャンクにも含まれない語の部分を返す（引用符・句読点だけの差は無視）。
+function findUncoveredParts(target, breakdown) {
+  const source = String(target || '');
+  const items = Array.isArray(breakdown) ? breakdown : [];
+  const spans = locateChunks(source, items.map((item) => item?.chunk));
+  const covered = new Array(source.length).fill(false);
+  spans.forEach((sp) => { if (sp) covered.fill(true, sp.start, sp.end); });
+  const parts = [];
+  let start = -1;
+  for (let i = 0; i <= source.length; i++) {
+    if (i < source.length && !covered[i]) {
+      if (start === -1) start = i;
+    } else if (start !== -1) {
+      const piece = source.slice(start, i);
+      if (/[\p{L}\p{N}]/u.test(piece)) {
+        // 前後の句読点・空白は落として、語の部分だけを返す
+        const lead = piece.search(/[\p{L}\p{N}"'“‘]/u);
+        const trimmed = piece.slice(lead).replace(/[\s,;:-]+$/, '');
+        parts.push({ start: start + lead, end: start + lead + trimmed.length, text: trimmed.trim() });
+      }
+      start = -1;
+    }
+  }
+  return parts;
+}
+
+// 再依頼しても漏れが残った場合は、漏れた部分を「未解析」のチャンクとして元の位置に補い、黙って消えないようにする。
+function fillUncoveredParts(target, breakdown) {
+  const parts = findUncoveredParts(target, breakdown);
+  if (!parts.length) return breakdown;
+  const spans = locateChunks(target, breakdown.map((item) => item?.chunk));
+  const located = breakdown.map((item, i) => ({ item, at: spans[i] ? spans[i].start : Infinity }));
+  parts.forEach((part) => located.push({ item: { chunk: part.text, role: '?', note: 'AIの構文分解から漏れた部分です（役割は未解析）。' }, at: part.start }));
+  return located.sort((x, y) => x.at - y.at).map((entry) => entry.item);
+}
+
+async function askLlmWithFullCoverage(prompt, text, config) {
+  const data = await askLlm(prompt, config);
+  const missing = findUncoveredParts(text, data?.structureBreakdown);
+  if (!missing.length) return data;
+  // 1回だけ、漏れた部分を示して全体の分解をやり直してもらう。
+  const retryPrompt = `${prompt}
+
+Your previous answer's "structureBreakdown" did not cover these parts of the Target: ${missing.map((m) => JSON.stringify(m.text)).join(', ')}.
+Return the complete JSON again. The chunks must cover the whole Target, from ${JSON.stringify(text.split(' ').slice(0, 3).join(' '))} to the very end.`;
+  let retried = null;
+  try {
+    retried = await askLlm(retryPrompt, config);
+  } catch {}
+  const best = retried && findUncoveredParts(text, retried.structureBreakdown).length < missing.length ? retried : data;
+  return { ...best, structureBreakdown: fillUncoveredParts(text, Array.isArray(best.structureBreakdown) ? best.structureBreakdown : []) };
+}
+
 async function handleExplain(request) {
   const text = clampText(request.text, MAX_TARGET_CHARS + 1);
   if (!text) return { success: false, error: '対象テキストが空です' };
@@ -665,7 +1018,7 @@ async function handleExplain(request) {
   const wordDefinitionMode = ankiConfig.wordDefinitionMode || 'llm-japanese';
   try {
     await requirePrivacyConsent();
-    const data = await askLlm(buildExplainPrompt(text, contextSentence, wordDefinitionMode), config);
+    const data = await askLlmWithFullCoverage(buildExplainPrompt(text, contextSentence, wordDefinitionMode), text, config);
     return await saveAndReturnExplanation(request, config.provider || 'gemini', data);
   } catch (err) {
     await recordDiagnostic('text-analysis', config.provider, err.message);
@@ -760,31 +1113,158 @@ function saveHistoryEntry(entry) {
   return historyWriteQueue;
 }
 
-// 未知語トグル: entry.unknownWords (string[]) に対して直列書き込みで追加/削除する。
-// saveHistoryEntry と同じ historyWriteQueue に乗せることで、
-// 「解析結果の保存」と「未知語マーク」が競合して片方を消してしまう事態を防ぐ。
-function handleToggleUnknownWord(request) {
-  const { entryId, word, unknown } = request || {};
-  const wordKey = String(word || '').trim();
-  if (!entryId || !wordKey) {
-    return Promise.resolve({ success: false, error: 'entryId または word がありません' });
-  }
-  const write = async () => {
-    const key = `history:${entryId}`;
-    const res = await chrome.storage.local.get(key);
-    const entry = res[key];
-    if (!entry) {
-      return { success: false, error: '対象の履歴が見つかりません（削除済みの可能性があります）' };
+// ============================================================
+// 記事ごとの単語帳: 利用者が「＋単語」で選んだ語を、記事（ページURL）ごとに端末内へ保存する。
+// 保存時は外部へ送信しない。意味（英英・和訳・例文）は単語帳画面で利用者が押したときだけLLMで作る。
+// ============================================================
+const WORDBOOK_PAGE_LIMIT = 300;
+const WORDBOOK_WORD_LIMIT = 200;
+const MAX_WORDBOOK_WORD_CHARS = 60;
+const TRACKING_PARAMS = /^(utm_\w+|fbclid|gclid|mc_cid|mc_eid|ref|ref_src)$/i;
+let wordbookWriteQueue = Promise.resolve();
+
+// 旧版の「未知語★」（解析履歴に付けた印）は単語帳に一本化した。
+// 印の付いた語を、意味と元の1文ごと特別な単語帳「履歴から移した未知語」へ1回だけ移し、履歴側の印は消す。
+const LEGACY_UNKNOWN_BOOK = 'readanki:unknown-words';
+
+function migrateUnknownWordsToWordbook() {
+  const run = async () => {
+    const { unknownWordsMigrated, historyIndex = [] } = await chrome.storage.local.get(['unknownWordsMigrated', 'historyIndex']);
+    if (unknownWordsMigrated) return;
+    const keys = (Array.isArray(historyIndex) ? historyIndex : []).map((id) => `history:${id}`);
+    const stored = keys.length ? await chrome.storage.local.get(keys) : {};
+    const bookKey = `wordbook:${LEGACY_UNKNOWN_BOOK}`;
+    const { [bookKey]: existing, wordbookIndex = [] } = await chrome.storage.local.get([bookKey, 'wordbookIndex']);
+    const book = existing || { page: LEGACY_UNKNOWN_BOOK, title: '履歴から移した未知語（★）', createdAt: Date.now(), words: [] };
+    const updates = {};
+    for (const key of keys) {
+      const entry = stored[key];
+      const words = Array.isArray(entry?.unknownWords) ? entry.unknownWords : [];
+      if (!entry || (!words.length && !entry.reviewSchedule)) continue;
+      const vocab = Array.isArray(entry.explanation?.keyVocabulary) ? entry.explanation.keyVocabulary : [];
+      for (const raw of words) {
+        const word = clampText(raw, MAX_WORDBOOK_WORD_CHARS);
+        if (!word || book.words.length >= WORDBOOK_WORD_LIMIT) continue;
+        if (book.words.some((item) => item.word.toLowerCase() === word.toLowerCase())) continue;
+        const hit = vocab.find((v) => String(v?.word || '').trim() === raw);
+        book.words.push({
+          word,
+          context: clampText(entry.contextSentence || entry.targetPhrase || '', MAX_CONTEXT_CHARS),
+          ja: clampText(hit?.meaning || '', 200),
+          addedAt: entry.createdAt || Date.now(),
+        });
+      }
+      const { unknownWords, reviewSchedule, ...rest } = entry;
+      updates[key] = rest;
     }
-    const set = new Set(Array.isArray(entry.unknownWords) ? entry.unknownWords : []);
-    if (unknown) set.add(wordKey);
-    else set.delete(wordKey);
-    entry.unknownWords = Array.from(set);
-    await chrome.storage.local.set({ [key]: entry });
-    return { success: true, unknownWords: entry.unknownWords };
+    if (book.words.length) {
+      book.updatedAt = Date.now();
+      updates[bookKey] = book;
+      const index = Array.isArray(wordbookIndex) ? wordbookIndex : [];
+      if (!index.includes(LEGACY_UNKNOWN_BOOK)) updates.wordbookIndex = [LEGACY_UNKNOWN_BOOK, ...index];
+    }
+    updates.unknownWordsMigrated = true;
+    await chrome.storage.local.set(updates);
   };
-  historyWriteQueue = historyWriteQueue.then(write, write);
-  return historyWriteQueue;
+  const safe = () => run().catch((error) => console.warn('ReadAnki: failed to migrate unknown words', error));
+  wordbookWriteQueue = wordbookWriteQueue.then(safe, safe);
+  historyWriteQueue = historyWriteQueue.then(() => wordbookWriteQueue, () => wordbookWriteQueue);
+  return wordbookWriteQueue;
+}
+
+// 同じ記事を同じ単語帳にまとめるため、ページ内リンク（#）と追跡用パラメータを除いたURLを鍵にする。
+function wordbookPageKey(rawUrl) {
+  const url = new URL(rawUrl);
+  if (!['http:', 'https:'].includes(url.protocol)) throw new Error('通常のウェブページでのみ使えます。');
+  url.hash = '';
+  [...url.searchParams.keys()].forEach((key) => {
+    if (TRACKING_PARAMS.test(key)) url.searchParams.delete(key);
+  });
+  return url.toString();
+}
+
+function handleAddWordbookWord(request, senderUrl) {
+  const write = async () => {
+    const word = String(request.word || '').replace(/\s+/g, ' ').trim();
+    if (!word) return { success: false, error: '単語を選択してください。' };
+    if (word.length > MAX_WORDBOOK_WORD_CHARS) {
+      return { success: false, error: `単語・熟語は${MAX_WORDBOOK_WORD_CHARS}文字までです。` };
+    }
+    const page = wordbookPageKey(senderUrl);
+    const key = `wordbook:${page}`;
+    const { [key]: stored, wordbookIndex = [] } = await chrome.storage.local.get([key, 'wordbookIndex']);
+    const now = Date.now();
+    const book = stored || { page, title: '', createdAt: now, words: [] };
+    book.title = clampText(request.title || book.title || '', 200);
+    book.updatedAt = now;
+    const exists = book.words.some((item) => item.word.toLowerCase() === word.toLowerCase());
+    if (!exists) {
+      if (book.words.length >= WORDBOOK_WORD_LIMIT) {
+        return { success: false, error: `1つの記事に登録できるのは${WORDBOOK_WORD_LIMIT}語までです。` };
+      }
+      const entry = { word, context: clampText(request.context || '', MAX_CONTEXT_CHARS), addedAt: now };
+      // 解説カードの重要語彙から追加したときは、その日本語の意味も入れておく
+      const ja = clampText(request.ja || '', 200);
+      if (ja) entry.ja = ja;
+      book.words.push(entry);
+    }
+    const index = [page, ...(Array.isArray(wordbookIndex) ? wordbookIndex : []).filter((item) => item !== page)];
+    const removed = index.splice(WORDBOOK_PAGE_LIMIT);
+    await chrome.storage.local.set({ [key]: book, wordbookIndex: index });
+    if (removed.length) await chrome.storage.local.remove(removed.map((item) => `wordbook:${item}`));
+    return { success: true, page, count: book.words.length, duplicate: exists };
+  };
+  const run = () => write().catch((error) => ({ success: false, error: error.message }));
+  wordbookWriteQueue = wordbookWriteQueue.then(run, run);
+  return wordbookWriteQueue;
+}
+
+// 送るのは語と、その語を含む1文（追加時に保存したもの）だけ。
+async function handleDefineWordbookWords(request) {
+  const words = (Array.isArray(request.words) ? request.words : [])
+    .map((item) => ({
+      word: clampText(String(item?.word || '').trim(), MAX_WORDBOOK_WORD_CHARS),
+      context: clampText(String(item?.context || ''), MAX_CONTEXT_CHARS),
+    }))
+    .filter((item) => item.word)
+    .slice(0, 30);
+  if (!words.length) return { success: false, error: '意味を付ける単語がありません。' };
+  const config = await getLlmConfig();
+  try {
+    await requirePrivacyConsent();
+    const list = words.map((item, i) => `${i + 1}. ${item.word}${item.context ? ` | Context: ${item.context}` : ''}`).join('\n');
+    const prompt = `あなたは日本人の英語学習者を教える講師です。次の英単語・熟語それぞれについて、文脈（Context）での意味に合わせて説明してください。
+${list}
+
+次のJSONだけを返してください。words は入力と同じ順番・同じ数にしてください。
+{
+  "words": [
+    {
+      "word": "入力の語そのまま",
+      "enDefinition": "やさしい英語による英英定義（1文）",
+      "ja": "文脈に合う日本語訳（短く）",
+      "example": "その語を使った新しい英語の例文（1文。元の文とは別のもの）"
+    }
+  ]
+}`;
+    const data = await askLlm(prompt, config);
+    const results = Array.isArray(data?.words) ? data.words : [];
+    return {
+      success: true,
+      words: words.map((item, i) => {
+        const hit = results.find((r) => String(r?.word || '').trim().toLowerCase() === item.word.toLowerCase()) || results[i] || {};
+        return {
+          word: item.word,
+          enDefinition: clampText(String(hit.enDefinition || ''), 500),
+          ja: clampText(String(hit.ja || ''), 200),
+          example: clampText(String(hit.example || ''), 500),
+        };
+      }),
+    };
+  } catch (err) {
+    await recordDiagnostic('wordbook-define', config.provider, err.message);
+    return { success: false, error: err.message };
+  }
 }
 
 // ============================================================
@@ -806,6 +1286,7 @@ const ANKI_DEFAULTS = {
 // 文字色は指定しない（Ankiの夜間モードでもそのまま読めるように）。強調は半透明の背景と下線で表す。
 const CARD_STYLE = {
   front: 'text-align: center; font-size: 1.45em; line-height: 1.75; padding: 0.3em 0.2em;',
+  hint: 'margin-top: 0.6em; font-size: 0.68em; line-height: 1.6; opacity: 0.75;',
   back: 'text-align: left; max-width: 34em; margin: 0 auto; line-height: 1.7;',
   label: 'display: block; font-size: 0.7em; letter-spacing: 0.08em; opacity: 0.55; margin-bottom: 0.15em;',
   section: 'margin: 0 0 0.9em;',
@@ -860,16 +1341,52 @@ function noteFromFields(ankiConfig, deckKey, modelKey, card, generatedFields, ta
   };
 }
 
+// 文脈の中で、穴にする語句（S/V/O/C/Mのチャンク）を {{cN::…}} に変えた HTML を返す。
+// targets が空なら対象フレーズ全体を穴にする。separate なら c1, c2… と別々のカードにする。
+function clozeContextHtml(context, phrase, targets, separate) {
+  const list = (Array.isArray(targets) ? targets : [])
+    .map((t) => String(t || '').trim())
+    .filter(Boolean);
+  // 選択部分の位置から探す（同じ語が文の前のほうにあっても、選択部分の中を優先する）
+  const [phraseSpan] = phrase ? locateChunks(context, [phrase]) : [null];
+  let spans = list.length ? locateChunks(context, list, phraseSpan ? phraseSpan.start : 0).filter(Boolean) : [];
+  if (!spans.length) spans = phraseSpan ? [phraseSpan] : [];
+  if (!spans.length) return `{{c1::${escapeHtml(phrase || context)}}}`;
+  spans.sort((x, y) => x.start - y.start);
+  let html = '';
+  let pos = 0;
+  spans.forEach((sp, i) => {
+    html += escapeHtml(context.slice(pos, sp.start));
+    html += `{{c${separate ? i + 1 : 1}::${escapeHtml(context.slice(sp.start, sp.end))}}}`;
+    pos = sp.end;
+  });
+  return html + escapeHtml(context.slice(pos));
+}
+
+// カードに入れる日本語（設定画面「カードに入れる日本語」）。既定はすべて入れる。
+const CARD_JA_DEFAULTS = { grammar: true, vocabulary: true, translation: true, meaning: true, clozeHint: true, structure: true };
+
+function cardJaOptions(ankiConfig) {
+  return { ...CARD_JA_DEFAULTS, ...(ankiConfig && typeof ankiConfig.cardJa === 'object' ? ankiConfig.cardJa : {}) };
+}
+
 function buildVocabClozeNote(ankiConfig, card, tags, allowDuplicate) {
   const exp = card.explanation || {};
   const phrase = card.targetPhrase || '';
   const context = card.contextSentence || phrase;
+  const ja = cardJaOptions(ankiConfig);
+  // 表面の和訳ヒント: 穴の部分の訳（画面で選んだ穴に合わせて渡される）。未指定なら選択部分全体の訳。
+  const hint = typeof card.clozeHint === 'string'
+    ? card.clozeHint.trim()
+    : String(exp.targetTranslation || exp.sentenceTranslation || '').trim();
+  const front = clozeContextHtml(context, phrase, card.clozeTargets, card.clozeSeparate === true);
   const generatedFields = {
-    Text: cardFront(`{{c1::${escapeHtml(phrase)}}}`),
+    Text: cardFront(front + (ja.clozeHint && hint ? `<div style="${CARD_STYLE.hint}">${escapeHtml(hint)}</div>` : '')),
     'Back Extra': cardBack([
-      cardSection('文脈', highlightPhraseInContext(context, phrase)),
-      cardSection('訳', escapeHtml(exp.sentenceTranslation)),
-      cardSection('重要語彙', vocabularyList(exp.keyVocabulary)),
+      cardSection('対象の表現', highlightPhraseInContext(phrase, phrase)),
+      cardSection('意味', ja.meaning ? escapeHtml(phrase !== context ? exp.targetTranslation : '') : ''),
+      cardSection('訳', ja.translation ? escapeHtml(exp.sentenceTranslation) : ''),
+      cardSection('重要語彙', ja.vocabulary ? vocabularyList(exp.keyVocabulary) : ''),
     ]),
   };
   return noteFromFields(ankiConfig, 'vocabClozeDeckName', 'vocabClozeModelName', card, generatedFields, tags, allowDuplicate);
@@ -879,13 +1396,14 @@ function buildGrammarNote(ankiConfig, card, tags, allowDuplicate) {
   const exp = card.explanation || {};
   const phrase = card.targetPhrase || '';
   const context = card.contextSentence || phrase;
+  const ja = cardJaOptions(ankiConfig);
   // 表: 例文（問い）、裏: 文法ポイント（答え）
   const generatedFields = {
     Front: cardFront(highlightPhraseInContext(context, phrase)),
     Back: cardBack([
-      cardSection('文法ポイント', escapeHtml(exp.grammarPoint), 'main'),
-      cardSection('訳', escapeHtml(exp.sentenceTranslation)),
-      cardSection('構文', breakdownChips(exp.structureBreakdown)),
+      cardSection('文法ポイント', ja.grammar ? escapeHtml(exp.grammarPoint) : '', 'main'),
+      cardSection('訳', ja.translation ? escapeHtml(exp.sentenceTranslation) : ''),
+      cardSection('構文', ja.structure ? breakdownChips(exp.structureBreakdown) : ''),
     ]),
   };
   return noteFromFields(ankiConfig, 'grammarDeckName', 'grammarModelName', card, generatedFields, tags, allowDuplicate);
@@ -895,12 +1413,13 @@ function buildEnJaNote(ankiConfig, card, tags, allowDuplicate) {
   const exp = card.explanation || {};
   const phrase = card.targetPhrase || '';
   const context = card.contextSentence || phrase;
-  // 表: 英文、裏: 和訳
+  const ja = cardJaOptions(ankiConfig);
+  // 表: 英文、裏: 和訳（答えなので常に入れる）
   const generatedFields = {
     Front: cardFront(highlightPhraseInContext(context, phrase)),
     Back: cardBack([
       cardSection('和訳', escapeHtml(exp.sentenceTranslation), 'main'),
-      cardSection('文法', escapeHtml(exp.grammarPoint)),
+      cardSection('文法', ja.grammar ? escapeHtml(exp.grammarPoint) : ''),
     ]),
   };
   return noteFromFields(ankiConfig, 'enJaDeckName', 'enJaModelName', card, generatedFields, tags, allowDuplicate);
@@ -910,14 +1429,15 @@ function buildJaEnNote(ankiConfig, card, tags, allowDuplicate) {
   const exp = card.explanation || {};
   const phrase = card.targetPhrase || '';
   const context = card.contextSentence || phrase;
-  // 表: 和訳、裏: 英文（入力型では照合の正解になるため、HTMLを含まない英文だけにする）、解説は別フィールド
+  const ja = cardJaOptions(ankiConfig);
+  // 表: 和訳（問題なので常に入れる）、裏: 英文（入力型では照合の正解になるため、HTMLを含まない英文だけにする）、解説は別フィールド
   const generatedFields = {
     Front: cardFront(escapeHtml(exp.sentenceTranslation || '')),
     Back: context,
     Extra: cardBack([
       cardSection('対象の表現', highlightPhraseInContext(phrase, phrase)),
-      cardSection('文法', escapeHtml(exp.grammarPoint)),
-      cardSection('構文', breakdownChips(exp.structureBreakdown)),
+      cardSection('文法', ja.grammar ? escapeHtml(exp.grammarPoint) : ''),
+      cardSection('構文', ja.structure ? breakdownChips(exp.structureBreakdown) : ''),
     ]),
   };
   return noteFromFields(ankiConfig, 'jaEnDeckName', 'jaEnModelName', card, generatedFields, tags, allowDuplicate);

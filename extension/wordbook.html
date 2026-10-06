@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ReadAnki 単語帳</title>
+  <link rel="stylesheet" href="history.css">
+  <link rel="stylesheet" href="wordbook.css">
+</head>
+<body>
+  <main class="app-shell">
+    <header class="page-header">
+      <div>
+        <p class="eyebrow">READANKI</p>
+        <h1 id="wb-heading">記事ごとの単語帳</h1>
+        <p class="subtitle" id="wb-subtitle">記事を読みながら「＋単語」で集めた語を、記事ごとに見返せます。</p>
+      </div>
+      <a class="button" id="wb-back" href="wordbook.html">← 単語帳の一覧</a>
+    </header>
+
+    <section class="wb-actions wb-test-bar" id="wb-test-bar" hidden>
+      <button class="button wb-primary" id="wb-quiz-open" type="button">🧠 単語テスト</button>
+      <select id="wb-quiz-mode" aria-label="出題のしかた">
+        <option value="context">記事の文で出題</option>
+        <option value="example">AIの例文で出題（意味付け済みの語）</option>
+      </select>
+      <span class="wb-test-note" id="wb-quiz-note"></span>
+    </section>
+
+    <section class="wb-actions" id="wb-actions" hidden>
+      <a class="button" id="wb-open-page" target="_blank" rel="noopener noreferrer">記事を開く</a>
+      <button class="button wb-primary" id="wb-define" type="button">✨ AIで意味を付ける</button>
+      <button class="button" id="wb-anki" type="button" title="単語を記事の文の中で穴埋めにし、和訳をヒントにした語彙Clozeカードを送ります">📥 Ankiに送る</button>
+      <label class="wb-hide"><input type="checkbox" id="wb-hide-meaning"> 意味を隠す（押すと表示）</label>
+      <button class="button button-danger" id="wb-delete-book" type="button">この単語帳を削除</button>
+    </section>
+    <p class="wb-msg" id="wb-msg" role="status"></p>
+
+    <div id="wb-content" class="history-list" aria-live="polite"></div>
+
+    <div id="quiz-overlay" class="quiz-overlay" style="display:none;">
+      <div class="quiz-card" role="dialog" aria-label="単語テスト">
+        <div class="quiz-header">
+          <span id="quiz-progress" class="quiz-progress"></span>
+          <button id="quiz-close" class="quiz-close" type="button" aria-label="閉じる">&times;</button>
+        </div>
+        <div id="quiz-body" class="quiz-body"></div>
+      </div>
+    </div>
+  </main>
+  <script src="tts.js"></script>
+  <script src="wordbook.js"></script>
+</body>
+</html>

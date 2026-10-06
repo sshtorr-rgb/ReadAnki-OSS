@@ -1,0 +1,39 @@
+[hidden] { display: none !important; }
+.page-header .button { text-decoration: none; color: inherit; white-space: nowrap; }
+.wb-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 10px; }
+.wb-actions .button { text-decoration: none; color: inherit; }
+.wb-actions .wb-primary { color: #fff; background: #2563eb; border-color: #2563eb; }
+.wb-actions .wb-primary:disabled { opacity: .6; cursor: default; }
+.wb-actions .button-danger { color: #b91c1c; margin-left: auto; }
+.wb-hide { display: inline-flex; align-items: center; gap: 6px; color: #475569; font-size: 13px; cursor: pointer; }
+.wb-msg { min-height: 20px; margin: 0 0 12px; color: #475569; font-size: 13px; }
+.wb-book { display: flex; align-items: center; gap: 12px; padding: 16px 18px; background: #fff; border: 1px solid #e0e7f0; border-radius: 14px; }
+.wb-book a { flex: 1; min-width: 0; color: inherit; text-decoration: none; }
+.wb-book a:hover .phrase { color: #1d4ed8; }
+.wb-book .phrase { overflow-wrap: anywhere; }
+.wb-word { padding: 16px 18px; background: #fff; border: 1px solid #e0e7f0; border-radius: 14px; }
+.wb-word-head { display: flex; align-items: baseline; gap: 10px; }
+.wb-word-head h2 { margin: 0; color: #1e3a8a; font-size: 19px; overflow-wrap: anywhere; }
+.wb-word-head .wb-ja { color: #0f172a; font-weight: 700; }
+.wb-word-head .wb-tools { margin-left: auto; display: flex; gap: 4px; }
+.wb-icon { width: 34px; height: 34px; border: 0; border-radius: 8px; background: transparent; cursor: pointer; font-size: 15px; }
+.wb-icon:hover { background: #f1f5f9; }
+.wb-icon.wb-del { color: #b91c1c; }
+.wb-field { margin-top: 8px; color: #334155; line-height: 1.6; }
+.wb-field .detail-label { display: inline-block; min-width: 3.5em; margin: 0 8px 0 0; }
+.wb-context { margin-top: 10px; padding: 9px 12px; border-radius: 8px; background: #f8fafc; color: #475569; line-height: 1.7; }
+.wb-field mark, .wb-context mark { background: #fef3c7; color: #92400e; border-radius: 3px; padding: 0 2px; }
+.wb-pending { color: #94a3b8; font-size: 13px; }
+.is-hidden-meaning .wb-meaning { filter: blur(6px); cursor: pointer; user-select: none; }
+.is-hidden-meaning .wb-meaning.is-shown { filter: none; }
+@media (max-width: 620px) { .wb-actions .button-danger { margin-left: 0; } }
+
+/* ---- 単語テスト ---- */
+.wb-test-bar { align-items: center; }
+.wb-test-bar select { padding: 8px 10px; border: 1px solid #d8e0eb; border-radius: 9px; font-size: 13px; background: #fff; }
+.wb-test-note { font-size: 12px; color: #64748b; }
+.quiz-answer-word .wb-icon { font-size: 14px; }
+.quiz-btn-forgot { color: #b91c1c; border-color: #fecaca !important; }
+.quiz-btn-difficult { color: #b45309; border-color: #fde68a !important; }
+.quiz-btn-easy { color: #1d4ed8; border-color: #bfdbfe !important; }
+.quiz-btn-remembered { color: #047857; border-color: #a7f3d0 !important; }

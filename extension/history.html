@@ -22,21 +22,9 @@
         <span aria-hidden="true">⌕</span>
         <input id="search-input" type="search" placeholder="対象フレーズ・文の和訳で検索" autocomplete="off">
       </label>
-      <button id="open-quiz" class="button" type="button" style="display:none;">🧠 未知語テスト (<span id="quiz-count">0</span>)</button>
-      <button id="generate-sentence-quiz" class="button" type="button" style="display:none;">📝 例文テスト生成 (15語)</button>
-      <button id="export-unknown" class="button" type="button" style="display:none;">📥 未知語をAnkiにエクスポート</button>
+      <a id="open-wordbook" class="button" href="wordbook.html">📚 単語帳・単語テスト</a>
       <p id="history-count" class="history-count"></p>
     </section>
-
-    <div id="quiz-overlay" class="quiz-overlay" style="display:none;">
-      <div class="quiz-card">
-        <div class="quiz-header">
-          <span id="quiz-progress" class="quiz-progress"></span>
-          <button id="quiz-close" class="quiz-close" type="button" aria-label="閉じる">&times;</button>
-        </div>
-        <div id="quiz-body" class="quiz-body"></div>
-      </div>
-    </div>
 
     <div id="history-list" class="history-list" aria-live="polite"></div>
     <template id="empty-template">

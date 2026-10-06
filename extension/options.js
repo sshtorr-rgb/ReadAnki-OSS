@@ -3,11 +3,39 @@ function updateVisibility() {
   document.getElementById('local-openai-section').style.display =
     p === 'local-openai' ? 'block' : 'none';
   document.getElementById('ollama-section').style.display = p === 'ollama' ? 'block' : 'none';
-  document.getElementById('openai-section').style.display = p === 'openai' ? 'block' : 'none';
-  document.getElementById('gemini-section').style.display = p === 'gemini' ? 'block' : 'none';
+  // 外部の読み上げ（発音）で使うAPIキーの欄は、LLMプロバイダが別でも表示する。
+  const tts = document.getElementById('ttsEngine').value;
+  document.getElementById('openai-section').style.display = p === 'openai' || tts === 'openai' ? 'block' : 'none';
+  document.getElementById('gemini-section').style.display = p === 'gemini' || tts === 'gemini' ? 'block' : 'none';
 }
 
 document.getElementById('provider').addEventListener('change', updateVisibility);
+
+// ============================================================
+// タブ切り替え（最後に開いたタブはこのブラウザにだけ覚える）
+// ============================================================
+function showTab(key, remember = true) {
+  if (!document.getElementById(`panel-${key}`)) key = 'ai';
+  document.querySelectorAll('.tabs [data-tab]').forEach((btn) => {
+    btn.setAttribute('aria-selected', String(btn.dataset.tab === key));
+  });
+  document.querySelectorAll('.panel').forEach((panel) => {
+    panel.hidden = panel.dataset.panel !== key;
+  });
+  if (remember) { try { localStorage.setItem('readanki-options-tab', key); } catch {} }
+}
+
+document.querySelectorAll('.tabs [data-tab]').forEach((btn) => {
+  btn.addEventListener('click', () => showTab(btn.dataset.tab));
+});
+
+const prefillSite = new URLSearchParams(location.hash.slice(1)).get('add-site');
+let initialTab = 'ai';
+try { initialTab = localStorage.getItem('readanki-options-tab') || 'ai'; } catch {}
+showTab(prefillSite ? 'sites' : initialTab, false);
+
+// カードに入れる日本語（background.js の CARD_JA_DEFAULTS と同じ項目・既定値）
+const CARD_JA_DEFAULTS = { clozeHint: true, grammar: true, translation: true, meaning: true, vocabulary: true, structure: true };
 
 document.querySelectorAll('[data-preset-url]').forEach((el) => {
   el.addEventListener('click', (e) => {
@@ -18,7 +46,7 @@ document.querySelectorAll('[data-preset-url]').forEach((el) => {
 });
 
 Promise.all([
-  chrome.storage.local.get(['llmConfig', 'ankiConfig', 'privacyConsent', 'persistApiKeys']),
+  chrome.storage.local.get(['llmConfig', 'ankiConfig', 'privacyConsent', 'persistApiKeys', 'displayConfig']),
   chrome.storage.session.get('llmSecrets'),
 ]).then(([res, session]) => {
   const secrets = session.llmSecrets || {};
@@ -55,7 +83,16 @@ Promise.all([
       res.ankiConfig.jaEnDeckName || 'AnkiRead::JP-EN';
     document.getElementById('jaEnModelName').value = res.ankiConfig.jaEnModelName || '基本 (文字入力解答)';
   }
+  const display = res.displayConfig || {};
+  document.getElementById('display-grammar').value = display.grammar || 'show';
+  document.getElementById('display-vocabulary').value = display.vocabulary || 'show';
+  const cardJa = { ...CARD_JA_DEFAULTS, ...(res.ankiConfig?.cardJa || {}) };
+  Object.keys(CARD_JA_DEFAULTS).forEach((key) => {
+    document.getElementById(`cardJa-${key}`).checked = cardJa[key] !== false;
+  });
   document.getElementById('privacyConsent').checked = !!res.privacyConsent;
+  // 同意前は「プライバシー」タブから始める（同意しないと保存できないため）
+  if (!res.privacyConsent && !prefillSite) showTab('privacy', false);
   document.getElementById('persistApiKeys').checked = !!res.persistApiKeys;
   updateVisibility();
 });
@@ -75,7 +112,8 @@ function remoteHttpsOrigin(rawUrl) {
 
 document.getElementById('save-btn').addEventListener('click', async () => {
   if (!document.getElementById('privacyConsent').checked) {
-    document.getElementById('save-msg').textContent = '利用にはデータ処理への同意が必要です。';
+    document.getElementById('save-msg').textContent = '利用にはデータ処理への同意が必要です（「🔒 プライバシー」タブ）。';
+    showTab('privacy', false);
     return;
   }
   try {
@@ -124,8 +162,13 @@ document.getElementById('save-btn').addEventListener('click', async () => {
       enJaModelName: document.getElementById('enJaModelName').value,
       jaEnDeckName: document.getElementById('jaEnDeckName').value,
       jaEnModelName: document.getElementById('jaEnModelName').value,
+      cardJa: Object.fromEntries(Object.keys(CARD_JA_DEFAULTS).map((key) => [key, document.getElementById(`cardJa-${key}`).checked])),
     };
-    await chrome.storage.local.set({ llmConfig, ankiConfig, privacyConsent: true, persistApiKeys });
+    const displayConfig = {
+      grammar: document.getElementById('display-grammar').value,
+      vocabulary: document.getElementById('display-vocabulary').value,
+    };
+    await chrome.storage.local.set({ llmConfig, ankiConfig, displayConfig, privacyConsent: true, persistApiKeys });
     if (!persistApiKeys) await chrome.storage.local.remove(['localOpenAiApiKey', 'openAiApiKey', 'geminiApiKey']);
     await chrome.storage.session.set({ llmSecrets: secrets });
     const msg = document.getElementById('save-msg');
@@ -151,7 +194,6 @@ document.getElementById('copy-diagnostic').addEventListener('click', async () =>
     msg.textContent = '診断情報をコピーできませんでした。';
   }
 });
-
 
 // ============================================================
 // 常に有効にするサイト（許可サイト）
@@ -254,14 +296,12 @@ document.getElementById('site-input').addEventListener('keydown', (e) => {
 });
 
 // ポップアップの「このサイトを常に有効にする」から開かれた場合は、入力欄に入れておく。
-const prefillSite = new URLSearchParams(location.hash.slice(1)).get('add-site');
 if (prefillSite) {
   document.getElementById('site-input').value = prefillSite;
   document.getElementById('site-input').scrollIntoView({ block: 'center' });
   document.getElementById('site-msg').textContent = '「追加」を押すと、このサイトへのアクセス許可を求めます。';
 }
 renderSites();
-
 
 // 日英カード用の専用ノートタイプ（日本語／英文／解説）を Anki に作り、送り先にする。
 document.getElementById('create-ja-en-model').addEventListener('click', async () => {
@@ -283,4 +323,103 @@ document.getElementById('create-ja-en-model').addEventListener('click', async ()
   } catch (error) {
     msg.textContent = `作成に失敗しました: ${error.message}`;
   }
+});
+
+// ============================================================
+// 発音（読み上げ）
+// ============================================================
+const TTS_FIELD_IDS = ['openAiTtsVoice', 'openAiTtsModel', 'geminiTtsVoice', 'geminiTtsModel', 'localTtsUrl', 'localTtsModel', 'localTtsVoice'];
+let savedVoiceURI = '';
+
+function readTtsForm() {
+  const config = {
+    engine: document.getElementById('ttsEngine').value,
+    accent: document.getElementById('ttsAccent').value,
+    voiceURI: document.getElementById('ttsVoice').value,
+    rate: Number(document.getElementById('ttsRate').value) || 0.95,
+  };
+  TTS_FIELD_IDS.forEach((id) => { config[id] = document.getElementById(id).value.trim(); });
+  return config;
+}
+
+function updateTtsVisibility() {
+  const engine = document.getElementById('ttsEngine').value;
+  document.getElementById('tts-browser-section').hidden = engine !== 'browser';
+  document.getElementById('tts-openai-section').hidden = engine !== 'openai';
+  document.getElementById('tts-gemini-section').hidden = engine !== 'gemini';
+  document.getElementById('tts-local-section').hidden = engine !== 'local';
+  document.getElementById('tts-external-note').hidden = engine === 'browser';
+  updateVisibility();
+}
+
+async function renderVoiceOptions() {
+  const select = document.getElementById('ttsVoice');
+  const current = select.value || savedVoiceURI;
+  const accent = document.getElementById('ttsAccent').value;
+  const voices = await window.ReadAnkiTTS.loadVoices();
+  const list = window.ReadAnkiTTS.englishVoices(voices, accent);
+  const auto = window.ReadAnkiTTS.pickVoice(voices, { accent, voiceURI: '' });
+  select.replaceChildren();
+  const autoOption = document.createElement('option');
+  autoOption.value = '';
+  autoOption.textContent = `自動（おすすめ）${auto ? `: ${auto.name}` : ''}`;
+  select.appendChild(autoOption);
+  for (const voice of list) {
+    const option = document.createElement('option');
+    option.value = voice.voiceURI;
+    option.textContent = `${window.ReadAnkiTTS.voiceScore(voice) >= 3 ? '★ ' : ''}${voice.name}${voice.localService ? '' : '（オンライン）'}`;
+    select.appendChild(option);
+  }
+  if (!list.length) autoOption.textContent += '（このアクセントの声がありません）';
+  select.value = list.some((v) => v.voiceURI === current) ? current : '';
+}
+
+chrome.storage.local.get('ttsConfig').then(({ ttsConfig = {} }) => {
+  const config = { ...window.ReadAnkiTTS.DEFAULTS, ...ttsConfig };
+  document.getElementById('ttsEngine').value = config.engine;
+  document.getElementById('ttsAccent').value = config.accent;
+  document.getElementById('ttsRate').value = config.rate;
+  document.getElementById('ttsRateLabel').textContent = Number(config.rate).toFixed(2);
+  TTS_FIELD_IDS.forEach((id) => { if (config[id]) document.getElementById(id).value = config[id]; });
+  savedVoiceURI = config.voiceURI || '';
+  updateTtsVisibility();
+  renderVoiceOptions();
+});
+
+document.getElementById('ttsEngine').addEventListener('change', updateTtsVisibility);
+document.getElementById('ttsAccent').addEventListener('change', () => {
+  document.getElementById('ttsVoice').value = '';
+  renderVoiceOptions();
+});
+document.getElementById('ttsRate').addEventListener('input', (e) => {
+  document.getElementById('ttsRateLabel').textContent = Number(e.target.value).toFixed(2);
+});
+
+document.getElementById('tts-preview').addEventListener('click', () => {
+  const msg = document.getElementById('tts-msg');
+  const config = readTtsForm();
+  msg.textContent = config.engine === 'browser' ? '' : '音声を取得中…';
+  window.ReadAnkiTTS.speak('Reading the news every day is a great way to improve your English.', {
+    config,
+    onFallback: (error) => { msg.textContent = `外部の読み上げに失敗したため、ブラウザの音声で再生しました: ${error.message}`; },
+  }).then(() => {
+    if (msg.textContent === '音声を取得中…') msg.textContent = '';
+  }).catch((error) => { msg.textContent = `読み上げできませんでした: ${error.message}`; });
+});
+
+// 「設定を保存」で発音の設定も保存する（APIキーは保存しない。AI設定の欄のものを使う）。
+document.getElementById('save-btn').addEventListener('click', async () => {
+  if (!document.getElementById('privacyConsent').checked) return;
+  const config = readTtsForm();
+  if (config.engine === 'local') {
+    try {
+      const url = new URL(config.localTtsUrl);
+      if (!LOOPBACK_HOSTS.includes(url.hostname)) throw new Error();
+    } catch {
+      document.getElementById('tts-msg').textContent = 'ローカルTTS URL は localhost / 127.0.0.1 のみ指定できます。発音の設定は保存しませんでした。';
+      return;
+    }
+  }
+  await chrome.storage.local.set({ ttsConfig: config });
+  savedVoiceURI = config.voiceURI;
 });

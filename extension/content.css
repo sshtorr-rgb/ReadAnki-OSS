@@ -17,6 +17,59 @@
   to { opacity: 1; transform: translateY(0); }
 }
 
+.readanki-collapsed-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.readanki-word-trigger {
+  background: #0f172a;
+  color: #f8fafc;
+  border: 1px solid rgba(71, 85, 105, 0.8);
+  border-radius: 9999px;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+  animation: readankiFadeIn 0.15s ease-out;
+}
+
+.readanki-word-trigger:hover {
+  background: #1e293b;
+}
+
+.readanki-wordbook-toast {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 2147483647;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: min(420px, calc(100vw - 32px));
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: #0f172a;
+  color: #f8fafc;
+  font: 13px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans JP", sans-serif;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+  animation: readankiFadeIn 0.15s ease-out;
+}
+
+.readanki-wordbook-toast button {
+  flex: 0 0 auto;
+  border: 1px solid #3b82f6;
+  border-radius: 7px;
+  background: transparent;
+  color: #93c5fd;
+  padding: 4px 9px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
 .readanki-dot-trigger {
   display: inline-flex;
   align-items: center;
@@ -486,3 +539,125 @@
 .readanki-tip .t-word { font-size: 11px; font-weight: 700; color: #9db4f0; margin-bottom: 3px; }
 .readanki-tip .t-general { margin-bottom: 6px; }
 .readanki-tip .t-context { color: #c2c9d6; }
+
+/* ---- 解析後の読み上げ ---- */
+.readanki-card-v3 .rk-tts-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.readanki-card-v3 .rk-tts-btn,
+.readanki-card-v3 .rk-cloze-role,
+.readanki-card-v3 .rk-cloze-chip {
+  border: 1px solid var(--line);
+  background: var(--paper);
+  color: var(--ink-soft);
+  border-radius: 999px;
+  padding: 3px 10px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  cursor: pointer;
+}
+.readanki-card-v3 .rk-tts-btn:hover,
+.readanki-card-v3 .rk-cloze-role:hover,
+.readanki-card-v3 .rk-cloze-chip:hover { background: var(--canvas); }
+.readanki-card-v3 .rk-tts-btn[aria-pressed="true"],
+.readanki-card-v3 .rk-cloze-role[aria-pressed="true"],
+.readanki-card-v3 .rk-cloze-chip[aria-pressed="true"] {
+  background: var(--role-v);
+  border-color: var(--role-v);
+  color: #fff;
+}
+
+/* ---- 語彙Cloze: 穴にする部分の選択 ---- */
+.readanki-card-v3 .rk-cloze-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+}
+.readanki-card-v3 .rk-cloze-head { font-size: 11px; font-weight: 700; color: var(--ink-soft); }
+.readanki-card-v3 .rk-cloze-roles,
+.readanki-card-v3 .rk-cloze-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.readanki-card-v3 .rk-cloze-chip { border-radius: 6px; text-align: left; }
+.readanki-card-v3 .rk-cloze-chip-role { font-size: 10px; font-weight: 700; margin-right: 5px; opacity: 0.7; }
+.readanki-card-v3 .rk-r-S .rk-cloze-chip-role, .readanki-card-v3 .rk-cloze-role.rk-r-S { border-left: 3px solid var(--role-s); }
+.readanki-card-v3 .rk-r-V .rk-cloze-chip-role, .readanki-card-v3 .rk-cloze-role.rk-r-V { border-left: 3px solid var(--role-v); }
+.readanki-card-v3 .rk-r-O .rk-cloze-chip-role, .readanki-card-v3 .rk-cloze-role.rk-r-O { border-left: 3px solid var(--role-o); }
+.readanki-card-v3 .rk-r-C .rk-cloze-chip-role, .readanki-card-v3 .rk-cloze-role.rk-r-C { border-left: 3px solid var(--role-c); }
+.readanki-card-v3 .rk-cloze-chip-role { padding-left: 4px; }
+.readanki-card-v3 .rk-cloze-separate { display: flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--ink-soft); cursor: pointer; }
+.readanki-card-v3 .rk-cloze-warn { font-size: 10.5px; color: var(--muted); }
+.readanki-card-v3 [data-idx].rk-cloze-on {
+  background: rgba(31, 58, 147, 0.12);
+  outline: 1px dashed var(--role-v);
+  border-radius: 4px;
+}
+
+/* ---- 語彙Cloze: 語単位の選択・和訳ヒント ---- */
+.readanki-card-v3 .rk-cloze-chips { gap: 8px; }
+.readanki-card-v3 .rk-cloze-group {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 3px;
+  padding: 3px 5px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.readanki-card-v3 .rk-cloze-group.rk-r-S { border-left: 3px solid var(--role-s); }
+.readanki-card-v3 .rk-cloze-group.rk-r-V { border-left: 3px solid var(--role-v); }
+.readanki-card-v3 .rk-cloze-group.rk-r-O { border-left: 3px solid var(--role-o); }
+.readanki-card-v3 .rk-cloze-group.rk-r-C { border-left: 3px solid var(--role-c); }
+.readanki-card-v3 .rk-cloze-group .rk-cloze-chip { padding: 1px 6px; font-size: 10px; font-weight: 700; border-left-width: 1px; }
+.readanki-card-v3 .rk-cloze-word {
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--ink);
+  border-radius: 4px;
+  padding: 1px 4px;
+  font-size: 12px;
+  line-height: 1.5;
+  cursor: pointer;
+}
+.readanki-card-v3 .rk-cloze-word:hover { background: var(--canvas); }
+.readanki-card-v3 .rk-cloze-word[aria-pressed="true"] { background: var(--role-v); border-color: var(--role-v); color: #fff; }
+.readanki-card-v3 .rk-cloze-hint-row { display: flex; flex-direction: column; gap: 4px; }
+.readanki-card-v3 .rk-cloze-hint-line { display: flex; gap: 6px; }
+.readanki-card-v3 .rk-cloze-hint {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 5px 8px;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--ink);
+  background: var(--paper);
+}
+.readanki-card-v3 .rk-cloze-hint-auto {
+  border: 1px solid var(--line);
+  background: var(--paper);
+  color: var(--ink-soft);
+  border-radius: 6px;
+  padding: 3px 8px;
+  font-size: 11px;
+  font-weight: 400;
+  cursor: pointer;
+}
+
+/* ---- 語彙Cloze: 単語の自由選択 ---- */
+.readanki-card-v3 .rk-cloze-words { gap: 4px; }
+.readanki-card-v3 .rk-cloze-words .rk-cloze-word { border-color: var(--line); background: var(--paper); }
+
+/* ---- 解説カード: 隠した項目を表示するボタン ---- */
+.readanki-card-v3 .rk-reveal-btn {
+  display: block;
+  margin: 10px 0 0;
+  border: 1px dashed var(--line);
+  background: var(--paper);
+  color: var(--ink-soft);
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.readanki-card-v3 .rk-reveal-btn:hover { background: var(--canvas); }

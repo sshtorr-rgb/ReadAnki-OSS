@@ -9,7 +9,7 @@
   }
 
   const CIRCLED = ['①','②','③','④','⑤','⑥','⑦','⑧','⑨','⑩'];
-  const ROLE_JP = { S: '主語', V: '動詞', O: '目的語', C: '補語', M: '修飾語' };
+  const ROLE_JP = { S: '主語', V: '動詞', O: '目的語', C: '補語', M: '修飾語', '?': '未解析' };
 
   let toolbar = null;
   let popover = null;
@@ -71,9 +71,15 @@
     }
     let context = text;
     try {
-      const anchorNode = selection.anchorNode;
-      if (anchorNode && anchorNode.textContent) {
-        context = extractContextSentence(anchorNode.textContent, text);
+      // リンク（人名など）で文が分かれていても1文全体を取れるよう、段落などのブロック要素の文字から探す。
+      const range = selection.getRangeAt(0);
+      const block = closestBlock(range.commonAncestorContainer);
+      if (block && block.textContent) {
+        const before = document.createRange();
+        before.setStart(block, 0);
+        before.setEnd(range.startContainer, range.startOffset);
+        const offsetHint = before.toString().replace(/\s+/g, ' ').trimStart().length;
+        context = extractContextSentence(block.textContent, text, offsetHint);
       }
     } catch (e) {}
     lastSelection = text;
@@ -91,16 +97,28 @@
   // 送信・保存する文脈は「選択を含む1文」に限定する（プライバシーポリシーの記載と一致させる）。
   const MAX_CONTEXT_CHARS = 500;
 
-  function extractContextSentence(nodeText, selected) {
+  const BLOCK_TAGS = /^(P|LI|DD|DT|BLOCKQUOTE|H[1-6]|TD|TH|CAPTION|FIGCAPTION|PRE|ARTICLE|SECTION|ASIDE|MAIN|DIV|BODY)$/;
+
+  function closestBlock(node) {
+    let el = node && node.nodeType === 1 ? node : node?.parentElement;
+    while (el && !BLOCK_TAGS.test(el.tagName)) el = el.parentElement;
+    return el || null;
+  }
+
+  function extractContextSentence(nodeText, selected, offsetHint = 0) {
     const source = String(nodeText || '').replace(/\s+/g, ' ').trim();
     const target = String(selected || '').replace(/\s+/g, ' ').trim();
-    const index = source.indexOf(target);
+    // 同じ語句が段落内に複数あるときは、選択した位置に近いものを使う
+    let index = source.indexOf(target, Math.max(0, offsetHint - 5));
+    if (index === -1) index = source.indexOf(target);
     if (!target || index === -1) return target.slice(0, MAX_CONTEXT_CHARS);
     const before = source.slice(0, index);
     const after = source.slice(index + target.length);
     const startMatch = before.match(/[.!?。！？]\s+(?=[^.!?。！？]*$)/);
     const start = startMatch ? startMatch.index + startMatch[0].length : 0;
-    const endMatch = after.match(/[.!?。！？]/);
+    // 選択が文末記号で終わっている場合は、次の文まで広げない。
+    const endsSentence = /[.!?。！？]["'”’)\]]*$/.test(target);
+    const endMatch = endsSentence ? { index: -1 } : after.match(/[.!?。！？]/);
     const end = index + target.length + (endMatch ? endMatch.index + 1 : after.length);
     const sentence = source.slice(start, end).trim();
     if (sentence.length <= MAX_CONTEXT_CHARS) return sentence;
@@ -117,11 +135,14 @@
     toolbar.id = 'readanki-three-dots-wrapper';
     toolbar.className = 'readanki-dots-wrapper';
     toolbar.innerHTML = `
-      <button class="readanki-dot-trigger" id="readanki-dot-trigger" title="ReadAnki: クリックしてメニューを展開">
-        <span class="readanki-indicator-dot"></span>
-        <span class="readanki-dots-symbol">⋯</span>
-        <span class="readanki-dots-tag">ReadAnki</span>
-      </button>
+      <span class="readanki-collapsed-group" id="readanki-collapsed-group">
+        <button class="readanki-dot-trigger" id="readanki-dot-trigger" title="ReadAnki: クリックしてメニューを展開">
+          <span class="readanki-indicator-dot"></span>
+          <span class="readanki-dots-symbol">⋯</span>
+          <span class="readanki-dots-tag">ReadAnki</span>
+        </button>
+        <button class="readanki-word-trigger" id="readanki-word-add" title="選んだ単語を、この記事の単語帳に追加（送信はしません）">＋単語</button>
+      </span>
       <div class="readanki-toolbar-menu" id="readanki-toolbar-menu" style="display: none;">
         <button class="readanki-btn-mini readanki-btn-collapse" id="readanki-btn-collapse" title="三点リーダーに折りたたむ">
           <span>⋯</span>
@@ -130,6 +151,10 @@
         <button class="readanki-btn-mini readanki-btn-primary" id="readanki-btn-explain" title="文法・構文解説 (AI)">
           <span class="readanki-icon">🪄</span>
           <span class="readanki-label">解説</span>
+        </button>
+        <button class="readanki-btn-mini" id="readanki-btn-word" title="選んだ単語を、この記事の単語帳に追加（送信はしません）">
+          <span class="readanki-icon">📚</span>
+          <span class="readanki-label">単語</span>
         </button>
         <button class="readanki-btn-mini" id="readanki-btn-image-paste" title="クリップボードのスクリーンショットを解析">
           <span class="readanki-icon">📋</span>
@@ -157,6 +182,7 @@
     document.body.appendChild(toolbar);
 
     const triggerBtn = toolbar.querySelector('#readanki-dot-trigger');
+    const collapsedGroup = toolbar.querySelector('#readanki-collapsed-group');
     const menuDiv = toolbar.querySelector('#readanki-toolbar-menu');
 
     function positionElement(targetEl) {
@@ -174,24 +200,30 @@
       toolbar.style.left = left + 'px';
       toolbar.style.top = top + 'px';
     }
-    positionElement(triggerBtn);
+    positionElement(collapsedGroup);
 
     triggerBtn.onclick = (e) => {
       e.stopPropagation();
-      triggerBtn.style.display = 'none';
+      collapsedGroup.style.display = 'none';
       menuDiv.style.display = 'inline-flex';
       positionElement(menuDiv);
     };
     toolbar.querySelector('#readanki-btn-collapse').onclick = (e) => {
       e.stopPropagation();
       menuDiv.style.display = 'none';
-      triggerBtn.style.display = 'inline-flex';
-      positionElement(triggerBtn);
+      collapsedGroup.style.display = 'inline-flex';
+      positionElement(collapsedGroup);
     };
     toolbar.querySelector('#readanki-btn-explain').onclick = (e) => {
       e.stopPropagation();
       openExplanationPopover(coords, text, lastContext);
     };
+    const addWord = (e) => {
+      e.stopPropagation();
+      addToWordbook(text, lastContext);
+    };
+    toolbar.querySelector('#readanki-word-add').onclick = addWord;
+    toolbar.querySelector('#readanki-btn-word').onclick = addWord;
     toolbar.querySelector('#readanki-btn-image-paste').onclick = (e) => {
       e.stopPropagation();
       pasteScreenshotFromClipboard(coords);
@@ -220,6 +252,56 @@
     };
   }
 
+  // ---------- 記事ごとの単語帳 ----------
+  // 選んだ語とその1文を、この記事の単語帳（端末内）に追加する。ここでは外部へ送信しない。
+  function addToWordbook(word, context) {
+    const value = String(word || '').replace(/\s+/g, ' ').trim();
+    if (value.length > 60) {
+      showWordbookToast('単語帳には、単語・熟語（60文字まで）を選んで追加してください。');
+      return;
+    }
+    chrome.runtime.sendMessage(
+      { action: 'addWordbookWord', word: value, context, title: document.title },
+      (res) => {
+        if (isStale()) return;
+        if (!res?.success) {
+          showWordbookToast('単語帳に追加できませんでした: ' + (res?.error || '不明なエラー'));
+          return;
+        }
+        removeToolbar();
+        showWordbookToast(
+          res.duplicate ? `「${value}」は登録済みです（この記事: ${res.count}語）` : `「${value}」を単語帳に追加しました（この記事: ${res.count}語）`,
+          res.page
+        );
+      }
+    );
+  }
+
+  let wordbookToast = null;
+  let wordbookToastTimer = null;
+
+  function showWordbookToast(message, page) {
+    if (wordbookToast) wordbookToast.remove();
+    clearTimeout(wordbookToastTimer);
+    wordbookToast = document.createElement('div');
+    wordbookToast.className = 'readanki-wordbook-toast';
+    const text = document.createElement('span');
+    text.textContent = message;
+    wordbookToast.appendChild(text);
+    if (page) {
+      const open = document.createElement('button');
+      open.type = 'button';
+      open.textContent = '単語帳を開く';
+      open.onclick = () => chrome.runtime.sendMessage({ action: 'openWordbook', page });
+      wordbookToast.appendChild(open);
+    }
+    document.body.appendChild(wordbookToast);
+    wordbookToastTimer = setTimeout(() => {
+      wordbookToast?.remove();
+      wordbookToast = null;
+    }, 4000);
+  }
+
   function removeToolbar() {
     if (toolbar) {
       toolbar.remove();
@@ -235,14 +317,13 @@
     }
   }
 
-  function playTTS(text) {
-    if ('speechSynthesis' in window) {
-      window.speechSynthesis.cancel();
-      const utter = new SpeechSynthesisUtterance(text);
-      utter.lang = 'en-US';
-      utter.rate = 0.95;
-      window.speechSynthesis.speak(utter);
-    }
+  // 読み上げは tts.js（設定画面で選んだ声・方式）に任せる。外部TTSが失敗したらブラウザ音声で読み、その旨を表示する。
+  function playTTS(text, slow = false) {
+    if (!window.ReadAnkiTTS) return;
+    window.ReadAnkiTTS.speak(text, {
+      slow,
+      onFallback: (error) => showWordbookToast('外部の読み上げに失敗したため、ブラウザの音声で読み上げます: ' + error.message),
+    }).catch((error) => showWordbookToast('読み上げできませんでした: ' + error.message));
   }
 
   function escapeHtml(value) {
@@ -355,6 +436,11 @@
           <div class="zone-label">原文<span class="ln"></span></div>
           <div class="sentence" id="rk-sentence"></div>
           <div class="gloss" id="rk-gloss"></div>
+          <div class="rk-tts-row" id="rk-tts-row" style="display:none;">
+            <button type="button" class="rk-tts-btn" id="rk-tts-target" title="選択部分を読み上げる">🔊 選択部分</button>
+            <button type="button" class="rk-tts-btn" id="rk-tts-context" title="文全体を読み上げる">🔊 文全体</button>
+            <button type="button" class="rk-tts-btn" id="rk-tts-slow" aria-pressed="false" title="ゆっくり読み上げる">🐢 ゆっくり</button>
+          </div>
         </div>
         <div class="grammar-note" id="rk-grammar">
           <div class="rk-loading"><div class="rk-spinner"></div><div>構文と文法を解析中…</div></div>
@@ -374,10 +460,25 @@
         </div>
         <div class="rk-edit-fields" id="rk-edit-fields">
           <div class="rk-cardtype">
-            <label><input type="radio" name="rk-cardtype" value="vocab-cloze" checked> 語彙Cloze（手修正必須）</label>
+            <label><input type="radio" name="rk-cardtype" value="vocab-cloze" checked> 語彙Cloze（穴を単語で選択）</label>
             <label><input type="radio" name="rk-cardtype" value="grammar"> Grammar（文法学習）</label>
             <label><input type="radio" name="rk-cardtype" value="en-ja"> 英日（英→和）</label>
             <label><input type="radio" name="rk-cardtype" value="ja-en"> 日英（和→英）</label>
+          </div>
+          <div class="rk-cloze-picker" id="rk-cloze-picker" style="display:none;">
+            <div class="rk-cloze-head">穴にする単語（押して切り替え・Shift＋クリックで範囲。続けて選んだ単語が1つの穴になります。何も選ばなければ選択部分全体）</div>
+            <div class="rk-cloze-chips rk-cloze-words" id="rk-cloze-chips"></div>
+            <label class="rk-cloze-separate"><input type="checkbox" id="rk-cloze-separate"> 穴ごとに別のカードにする（c1, c2…）</label>
+            <div class="rk-cloze-hint-row" id="rk-cloze-hint-row">
+              <label class="rk-anki-field-label">和訳ヒント（表面・穴の部分の訳）
+                <span class="rk-cloze-hint-line">
+                  <input type="text" class="rk-cloze-hint" id="rk-cloze-hint" autocomplete="off">
+                  <button type="button" class="rk-cloze-hint-auto" id="rk-cloze-hint-auto" title="手で直した内容を捨て、穴に合わせた訳に戻す">↺ 自動</button>
+                </span>
+              </label>
+              <small class="rk-cloze-warn" id="rk-cloze-hint-status" aria-live="polite"></small>
+            </div>
+            <small class="rk-cloze-warn">※切り替えると「本文（穴埋め）」欄は作り直されます</small>
           </div>
           <div class="rk-anki-fields" id="rk-anki-fields" aria-live="polite"></div>
         </div>
@@ -513,6 +614,35 @@
     );
   }
 
+  const DISPLAY_LABELS = { grammar: '文法の解説', vocabulary: '重要語彙' };
+
+  function applyDisplaySettings(grammarEl, vocabularyEl, hasVocabulary) {
+    const currentPopover = popover;
+    chrome.storage.local.get(['displayConfig'], (res) => {
+      if (popover !== currentPopover) return;
+      const config = res.displayConfig || {};
+      const targets = { grammar: grammarEl, vocabulary: hasVocabulary ? vocabularyEl : null };
+      Object.entries(targets).forEach(([key, el]) => {
+        if (!el) return;
+        const mode = config[key] || 'show';
+        if (mode === 'show') return;
+        const shownDisplay = key === 'vocabulary' ? 'block' : '';
+        el.style.display = 'none';
+        if (mode !== 'collapse') return;
+        const reveal = document.createElement('button');
+        reveal.type = 'button';
+        reveal.className = 'rk-reveal-btn';
+        reveal.textContent = `▸ ${DISPLAY_LABELS[key]}を表示`;
+        reveal.onclick = () => {
+          const hidden = el.style.display === 'none';
+          el.style.display = hidden ? shownDisplay : 'none';
+          reveal.textContent = `${hidden ? '▾' : '▸'} ${DISPLAY_LABELS[key]}を${hidden ? '隠す' : '表示'}`;
+        };
+        el.parentNode.insertBefore(reveal, el);
+      });
+    });
+  }
+
   function renderExplainResponse(response, phrase, context) {
     const grammarEl = popover.querySelector('#rk-grammar');
     const actionsEl = popover.querySelector('#rk-actions');
@@ -567,23 +697,39 @@
       sentenceEl.textContent = context || phrase || '';
     }
 
+    // 選択部分だけを解析した場合は、選択部分とその訳だけを表示する（文全体とその訳は出さない）。
+    const isPartial = !!phrase && !!context && context.trim() !== phrase.trim();
     const glossEl = popover.querySelector('#rk-gloss');
-    glossEl.textContent = data.sentenceTranslation || '';
+    if (isPartial && data.targetTranslation) {
+      glossEl.textContent = data.targetTranslation;
+    } else {
+      glossEl.textContent = data.sentenceTranslation || data.targetTranslation || '';
+    }
+
+    // 解析後の読み上げ（選択部分／文全体、ゆっくり切り替え）
+    const ttsRow = popover.querySelector('#rk-tts-row');
+    const ttsSlow = popover.querySelector('#rk-tts-slow');
+    const ttsIsSlow = () => ttsSlow.getAttribute('aria-pressed') === 'true';
+    const ttsTarget = phrase || context;
+    if (ttsTarget) {
+      ttsRow.style.display = 'flex';
+      popover.querySelector('#rk-tts-target').onclick = () => playTTS(ttsTarget, ttsIsSlow());
+      const ttsContextBtn = popover.querySelector('#rk-tts-context');
+      if (isPartial) ttsContextBtn.onclick = () => playTTS(context, ttsIsSlow());
+      else ttsContextBtn.style.display = 'none';
+      ttsSlow.onclick = () => ttsSlow.setAttribute('aria-pressed', String(!ttsIsSlow()));
+    }
 
     grammarEl.textContent = data.grammarPoint || '（文法解説なし）';
 
-    // 履歴は自動保存しない。「履歴に保存」を押すと entryId が付き、未知語★が使えるようになる。
+    // 履歴は自動保存しない。「履歴に保存」を押したときだけ端末内に保存する。
     let entryId = response.entryId || null;
-    const unknownToggles = [];
 
-    // 重要語彙: LLMから返された単語・意味・品詞を安全に描画する
+    // 重要語彙: LLMから返された単語・意味・品詞を安全に描画する。
+    // 各語の「＋」で、ページ上の「＋単語」と同じくこの記事の単語帳に追加する（覚えていない語の管理は単語帳に一本化）。
     const vocabulary = Array.isArray(data.keyVocabulary) ? data.keyVocabulary : [];
     vocabularyListEl.replaceChildren();
     if (vocabulary.length) {
-      const knownUnknown = new Set(
-        Array.isArray(response.unknownWords) ? response.unknownWords : []
-      );
-      
       // 単語定義モードを取得
       chrome.storage.local.get(['ankiConfig'], async (res) => {
         const wordDefMode = res.ankiConfig?.wordDefinitionMode || 'llm-japanese';
@@ -595,31 +741,30 @@
 
           const toggle = document.createElement('button');
           toggle.type = 'button';
-          toggle.className = 'rk-unknown-toggle';
-          const isUnknown = knownUnknown.has(wordKey);
-          toggle.setAttribute('aria-pressed', String(isUnknown));
-          toggle.classList.toggle('is-unknown', isUnknown);
-          toggle.textContent = isUnknown ? '★' : '☆';
+          toggle.className = 'rk-unknown-toggle rk-wordbook-add';
+          toggle.textContent = '＋';
+          toggle.title = 'この記事の単語帳に追加（送信はしません）';
           if (!wordKey) {
             toggle.disabled = true;
           } else {
-            unknownToggles.push(toggle);
-            setUnknownToggleState(toggle);
             toggle.addEventListener('click', () => {
-              if (!entryId) return;
-              const nextUnknown = toggle.getAttribute('aria-pressed') !== 'true';
               toggle.disabled = true;
               chrome.runtime.sendMessage(
-                { action: 'toggleUnknownWord', entryId, word: wordKey, unknown: nextUnknown },
+                { action: 'addWordbookWord', word: wordKey, context, title: document.title, ja: wordDefMode === 'llm-japanese' ? String(item?.meaning || '') : '' },
                 (res) => {
-                  toggle.disabled = false;
-                  if (!res || !res.success) {
-                    alert('未知語の登録に失敗しました: ' + (res?.error || '不明なエラー'));
+                  if (!toggle.isConnected) return;
+                  if (!res?.success) {
+                    toggle.disabled = false;
+                    showWordbookToast('単語帳に追加できませんでした: ' + (res?.error || '不明なエラー'));
                     return;
                   }
-                  toggle.setAttribute('aria-pressed', String(nextUnknown));
-                  toggle.classList.toggle('is-unknown', nextUnknown);
-                  toggle.textContent = nextUnknown ? '★' : '☆';
+                  toggle.textContent = '✓';
+                  toggle.classList.add('is-unknown');
+                  toggle.title = '単語帳に追加済み';
+                  showWordbookToast(
+                    res.duplicate ? `「${wordKey}」は登録済みです（この記事: ${res.count}語）` : `「${wordKey}」を単語帳に追加しました（この記事: ${res.count}語）`,
+                    res.page
+                  );
                 }
               );
             });
@@ -664,13 +809,6 @@
       vocabularyEl.style.display = 'none';
     }
 
-    function setUnknownToggleState(toggle) {
-      toggle.disabled = !entryId;
-      toggle.title = entryId
-        ? '未知語としてマーク（履歴タブでまとめて復習できます）'
-        : '「履歴に保存」すると未知語として登録できます';
-    }
-
     const saveHistoryBtn = popover.querySelector('#rk-save-history-btn');
     function markHistorySaved() {
       saveHistoryBtn.disabled = true;
@@ -688,7 +826,6 @@
           if (res && res.success && res.entryId) {
             entryId = res.entryId;
             markHistorySaved();
-            unknownToggles.forEach(setUnknownToggleState);
           } else {
             saveHistoryBtn.disabled = false;
             saveHistoryBtn.textContent = '💾 履歴に保存';
@@ -699,6 +836,9 @@
     };
 
     actionsEl.style.display = 'flex';
+
+    // 設定「解説カードの表示」: 文法の解説・重要語彙を 表示 / 隠す（押すと表示）/ 表示しない
+    applyDisplaySettings(grammarEl, vocabularyEl, vocabulary.length > 0);
 
     // Ankiの実フィールドを形式ごとに取得・保持し、HTML/Cloze記法を直接編集する。
     const currentPopover = popover;
@@ -758,11 +898,174 @@
             editorEl.textContent = `カード内容を取得できませんでした: ${result?.error || '不明なエラー'}`;
             return;
           }
-          cardDrafts[cardType] = { ...result.fields };
+          if (!cardDrafts[cardType]) cardDrafts[cardType] = { ...result.fields };
           renderAnkiFields(cardType);
         }
       );
     }
+
+    // 語彙Cloze: 選択した英文を単語ごとのボタンに分け、穴にする単語を自由に選んで本文欄をその場で作り直す。
+    // （AIの構文分解の区切りには縛られない。連続して選んだ単語が1つの穴になる）
+    // 表面には、穴の部分の和訳ヒントを付ける。
+    const clozePicker = popover.querySelector('#rk-cloze-picker');
+    const clozeChipsEl = popover.querySelector('#rk-cloze-chips');
+    const clozeSeparateEl = popover.querySelector('#rk-cloze-separate');
+    const clozeHintEl = popover.querySelector('#rk-cloze-hint');
+    const clozeHintAutoEl = popover.querySelector('#rk-cloze-hint-auto');
+    const clozeHintStatusEl = popover.querySelector('#rk-cloze-hint-status');
+    const clozeWords = String(phrase || '').split(/\s+/).filter(Boolean).map((text) => ({ text }));
+    const selectedWords = new Set();
+    const defaultHint = String(data.targetTranslation || data.sentenceTranslation || '').trim();
+    const hintCache = new Map();
+    let hintEdited = false;
+    let lastClickedWord = -1;
+    let clozeRequest = 0;
+    let hintTimer = null;
+
+    // 選んだ単語を、連続ごとの穴（単語番号の配列）にまとめる
+    function clozeGroups() {
+      const sorted = [...selectedWords].sort((x, y) => x - y);
+      const groups = [];
+      sorted.forEach((k) => {
+        const last = groups[groups.length - 1];
+        if (last && last[last.length - 1] === k - 1) last.push(k);
+        else groups.push([k]);
+      });
+      return groups;
+    }
+    const groupText = (group) => group.map((k) => clozeWords[k].text).join(' ').replace(/^[,.;:!?]+|[,.;:!?]+$/g, '');
+    const wordKey = (value) => (String(value || '').toLowerCase().match(/[\p{L}\p{N}]+/gu) || []).join(' ');
+
+    // 穴が解析結果のチャンク1つとちょうど同じ語なら、そのチャンクの和訳をすぐ使う
+    function chunkJaFor(text) {
+      const key = wordKey(text);
+      const hit = breakdown.find((b) => wordKey(b.chunk) === key);
+      return hit ? String(hit.ja || '').trim() : '';
+    }
+
+    function syncClozeUi() {
+      clozeChipsEl.querySelectorAll('[data-word]').forEach((btn) => {
+        btn.setAttribute('aria-pressed', String(selectedWords.has(Number(btn.dataset.word))));
+      });
+    }
+
+    function sendClozeFields() {
+      const requestId = ++clozeRequest;
+      chrome.runtime.sendMessage(
+        {
+          action: 'getAnkiFields',
+          card: {
+            targetPhrase: phrase, contextSentence: context, explanation: data, cardType: 'vocab-cloze',
+            clozeTargets: clozeGroups().map(groupText), clozeSeparate: clozeSeparateEl.checked,
+            clozeHint: clozeHintEl.value,
+          },
+        },
+        (result) => {
+          if (popover !== currentPopover || requestId !== clozeRequest || !result?.success) return;
+          if (activeCardType === 'vocab-cloze') saveActiveDraft();
+          cardDrafts['vocab-cloze'] = { ...(cardDrafts['vocab-cloze'] || result.fields), Text: result.fields.Text };
+          if (activeCardType === 'vocab-cloze') renderAnkiFields('vocab-cloze');
+          updateAnkiButton();
+        }
+      );
+    }
+
+    // 和訳ヒントを穴に合わせて自動で更新する（手で直した後は上書きしない）。
+    // チャンク単位の穴は解析結果の訳をすぐ使い、語単位で切った穴だけ少し待ってからAIに訳を問い合わせる。
+    function updateHint() {
+      clearTimeout(hintTimer);
+      if (hintEdited) return sendClozeFields();
+      const groups = clozeGroups();
+      if (!groups.length) {
+        clozeHintEl.value = defaultHint;
+        clozeHintStatusEl.textContent = '';
+        return sendClozeFields();
+      }
+      // ja: 訳（取得中は undefined、取得できなかったら空）
+      const parts = groups.map((g) => { const text = groupText(g); return { text, ja: chunkJaFor(text) || undefined }; });
+      parts.forEach((part) => { if (part.ja === undefined && hintCache.has(part.text)) part.ja = hintCache.get(part.text); });
+      const missing = parts.filter((part) => part.ja === undefined);
+      const apply = () => {
+        if (hintEdited) return;
+        clozeHintEl.value = parts.map((part) => (part.ja === undefined ? '…' : part.ja)).filter(Boolean).join(' ／ ');
+        sendClozeFields();
+      };
+      apply();
+      if (!missing.length) {
+        clozeHintStatusEl.textContent = '';
+        return;
+      }
+      clozeHintStatusEl.textContent = '訳を取得中…';
+      hintTimer = setTimeout(async () => {
+        for (const part of missing) {
+          const res = await chrome.runtime.sendMessage({ action: 'translateClozePart', part: part.text, sentence: context });
+          if (popover !== currentPopover) return;
+          if (res?.success) {
+            hintCache.set(part.text, res.ja);
+            part.ja = res.ja;
+          } else {
+            part.ja = '';
+            clozeHintStatusEl.textContent = `訳を取得できませんでした: ${res?.error || '不明なエラー'}（手で入力できます）`;
+          }
+        }
+        if (clozeHintStatusEl.textContent === '訳を取得中…') clozeHintStatusEl.textContent = '';
+        apply();
+      }, 600);
+    }
+
+    function regenerateClozeText() {
+      syncClozeUi();
+      updateHint();
+    }
+
+    if (clozeWords.length) {
+      clozeWords.forEach((w, k) => {
+        const word = document.createElement('button');
+        word.type = 'button';
+        word.className = 'rk-cloze-word';
+        word.dataset.word = k;
+        word.textContent = w.text;
+        word.onclick = (event) => {
+          // Shift＋クリックで、前にクリックした単語からの範囲をまとめて切り替える
+          if (event.shiftKey && lastClickedWord !== -1) {
+            const from = Math.min(lastClickedWord, k);
+            const to = Math.max(lastClickedWord, k);
+            const turnOn = !selectedWords.has(k);
+            for (let x = from; x <= to; x++) turnOn ? selectedWords.add(x) : selectedWords.delete(x);
+          } else if (selectedWords.has(k)) {
+            selectedWords.delete(k);
+          } else {
+            selectedWords.add(k);
+          }
+          lastClickedWord = k;
+          regenerateClozeText();
+        };
+        clozeChipsEl.appendChild(word);
+      });
+      clozeSeparateEl.onchange = () => {
+        if (selectedWords.size) updateHint();
+      };
+      clozeHintEl.value = defaultHint;
+      clozeHintEl.addEventListener('input', () => {
+        hintEdited = true;
+        clozeHintStatusEl.textContent = '';
+        sendClozeFields();
+      });
+      clozeHintAutoEl.onclick = () => {
+        hintEdited = false;
+        updateHint();
+      };
+      // 設定で「語彙Clozeの和訳ヒント」を外している場合は欄を隠す
+      chrome.storage.local.get(['ankiConfig'], (res) => {
+        if (res.ankiConfig?.cardJa?.clozeHint === false) { const row = popover?.querySelector('#rk-cloze-hint-row'); if (row) row.style.display = 'none'; }
+      });
+      syncClozeUi();
+    }
+
+    function updateClozePicker() {
+      clozePicker.style.display = clozeWords.length && activeCardType === 'vocab-cloze' ? 'block' : 'none';
+    }
+    updateClozePicker();
 
     // 編集トグル
     popover.querySelector('#rk-edit-toggle').onclick = () => {
@@ -803,6 +1106,7 @@
         if (!input.checked) return;
         saveActiveDraft();
         activeCardType = input.value;
+        updateClozePicker();
         loadAnkiFields(activeCardType);
         updateAnkiButton();
       });
