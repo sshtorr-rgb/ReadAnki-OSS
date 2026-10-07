@@ -18,12 +18,45 @@
   let lastContext = '';
   let currentSelectionCoords = null;
 
+  // スマホ（Firefox for Android）では長押しで選択するため mouseup が来ない。selectionchange で検知する。
+  const IS_TOUCH = window.matchMedia('(pointer: coarse)').matches;
+  let selectionTimer = null;
+
+  function handleSelectionChange() {
+    if (isStale() || popover) return;
+    clearTimeout(selectionTimer);
+    selectionTimer = setTimeout(() => {
+      const selection = window.getSelection();
+      // ツールバーをタップすると選択が外れるため、選択が空になっただけではツールバーを消さない。
+      if (!selection || selection.isCollapsed) return;
+      checkSelection();
+    }, 350);
+  }
+
+  // ページ側のスクリプトが作った偽の操作（el.click()・dispatchEvent など）では、ReadAnkiを動かさない。
+  // ReadAnkiの画面は通常のDOMに置いているため、ページから要素を押されると、利用者のAPIキーでAIを呼んだり、
+  // 単語帳を書き換えたりできてしまう。本物の操作は isTrusted が true になる。
+  const GUARDED_EVENTS = ['click', 'dblclick', 'auxclick', 'mousedown', 'mouseup', 'pointerdown', 'pointerup', 'touchstart', 'touchend',
+    'keydown', 'keyup', 'keypress', 'input', 'change', 'paste', 'submit'];
+  function blockSyntheticEventsOnOurUi(e) {
+    if (e.isTrusted || isStale()) return;
+    const target = e.target;
+    if (!(target instanceof Node)) return;
+    if (isOurUi(target) || (wordbookToast && wordbookToast.contains(target))) {
+      e.stopImmediatePropagation();
+      e.preventDefault();
+    }
+  }
+
   function init() {
+    // 捕捉段階で window に付けると、ReadAnkiの各ボタンのハンドラより先に動く。
+    GUARDED_EVENTS.forEach((type) => window.addEventListener(type, blockSyntheticEventsOnOurUi, true));
+    if (IS_TOUCH) document.addEventListener('selectionchange', handleSelectionChange);
     document.addEventListener('mouseup', handleMouseUp);
     document.addEventListener('keyup', handleKeyUp);
     document.addEventListener('mousedown', handleMouseDown);
     document.addEventListener('click', (e) => {
-      if (isStale()) return;
+      if (isStale() || !e.isTrusted) return;
       if (e.target.closest('[data-idx]')) return;
       hideTip();
     });
@@ -39,21 +72,21 @@
   }
 
   function handleMouseDown(e) {
-    if (isStale()) return;
+    if (isStale() || !e.isTrusted) return;
     if (isOurUi(e.target)) return;
     removeToolbar();
     removePopover();
   }
 
   function handleKeyUp(e) {
-    if (isStale()) return;
+    if (isStale() || !e.isTrusted) return;
     if (e.key === 'Shift' || (e.key && e.key.startsWith('Arrow'))) {
       checkSelection();
     }
   }
 
   function handleMouseUp(e) {
-    if (isStale()) return;
+    if (isStale() || !e.isTrusted) return;
     if (isOurUi(e.target)) return;
     setTimeout(checkSelection, 10);
   }
@@ -117,11 +150,14 @@
     toolbar.id = 'readanki-three-dots-wrapper';
     toolbar.className = 'readanki-dots-wrapper';
     toolbar.innerHTML = `
-      <button class="readanki-dot-trigger" id="readanki-dot-trigger" title="ReadAnki: クリックしてメニューを展開">
-        <span class="readanki-indicator-dot"></span>
-        <span class="readanki-dots-symbol">⋯</span>
-        <span class="readanki-dots-tag">ReadAnki</span>
-      </button>
+      <span class="readanki-collapsed-group" id="readanki-collapsed-group">
+        <button class="readanki-dot-trigger" id="readanki-dot-trigger" title="ReadAnki: クリックしてメニューを展開">
+          <span class="readanki-indicator-dot"></span>
+          <span class="readanki-dots-symbol">⋯</span>
+          <span class="readanki-dots-tag">ReadAnki</span>
+        </button>
+        <button class="readanki-word-trigger" id="readanki-word-add" title="選んだ単語を、この記事の単語帳に追加（送信はしません）">＋単語</button>
+      </span>
       <div class="readanki-toolbar-menu" id="readanki-toolbar-menu" style="display: none;">
         <button class="readanki-btn-mini readanki-btn-collapse" id="readanki-btn-collapse" title="三点リーダーに折りたたむ">
           <span>⋯</span>
@@ -131,13 +167,13 @@
           <span class="readanki-icon">🪄</span>
           <span class="readanki-label">解説</span>
         </button>
+        <button class="readanki-btn-mini" id="readanki-btn-word" title="選んだ単語を、この記事の単語帳に追加（送信はしません）">
+          <span class="readanki-icon">📚</span>
+          <span class="readanki-label">単語</span>
+        </button>
         <button class="readanki-btn-mini" id="readanki-btn-image-paste" title="クリップボードのスクリーンショットを解析">
           <span class="readanki-icon">📋</span>
           <span class="readanki-label">画像貼り付け</span>
-        </button>
-        <button class="readanki-btn-mini" id="readanki-btn-quick-anki" title="Ankiへ追加（試験中の機能です）">
-          <span class="readanki-icon">📥</span>
-          <span class="readanki-label">Anki</span>
         </button>
         <button class="readanki-btn-mini" id="readanki-btn-tts" title="発音を聞く">
           <span class="readanki-icon">🔊</span>
@@ -157,6 +193,7 @@
     document.body.appendChild(toolbar);
 
     const triggerBtn = toolbar.querySelector('#readanki-dot-trigger');
+    const collapsedGroup = toolbar.querySelector('#readanki-collapsed-group');
     const menuDiv = toolbar.querySelector('#readanki-toolbar-menu');
 
     function positionElement(targetEl) {
@@ -164,8 +201,9 @@
       const h = targetEl.offsetHeight || 32;
       let left = coords.x - w / 2 + window.scrollX;
       let top = coords.y - h - 8 + window.scrollY;
-      if (top < window.scrollY + 10) {
-        top = coords.bottom + 8 + window.scrollY;
+      // タッチ端末では選択範囲の上にOS標準のメニュー（コピー等）が出るので、下に表示する。
+      if (IS_TOUCH || top < window.scrollY + 10) {
+        top = coords.bottom + (IS_TOUCH ? 16 : 8) + window.scrollY;
       }
       if (left < 10) left = 10;
       if (left + w > window.innerWidth - 10) {
@@ -174,31 +212,33 @@
       toolbar.style.left = left + 'px';
       toolbar.style.top = top + 'px';
     }
-    positionElement(triggerBtn);
+    positionElement(collapsedGroup);
 
     triggerBtn.onclick = (e) => {
       e.stopPropagation();
-      triggerBtn.style.display = 'none';
+      collapsedGroup.style.display = 'none';
       menuDiv.style.display = 'inline-flex';
       positionElement(menuDiv);
     };
     toolbar.querySelector('#readanki-btn-collapse').onclick = (e) => {
       e.stopPropagation();
       menuDiv.style.display = 'none';
-      triggerBtn.style.display = 'inline-flex';
-      positionElement(triggerBtn);
+      collapsedGroup.style.display = 'inline-flex';
+      positionElement(collapsedGroup);
     };
     toolbar.querySelector('#readanki-btn-explain').onclick = (e) => {
       e.stopPropagation();
       openExplanationPopover(coords, text, lastContext);
     };
+    const addWord = (e) => {
+      e.stopPropagation();
+      addToWordbook(text, lastContext);
+    };
+    toolbar.querySelector('#readanki-word-add').onclick = addWord;
+    toolbar.querySelector('#readanki-btn-word').onclick = addWord;
     toolbar.querySelector('#readanki-btn-image-paste').onclick = (e) => {
       e.stopPropagation();
       pasteScreenshotFromClipboard(coords);
-    };
-    toolbar.querySelector('#readanki-btn-quick-anki').onclick = (e) => {
-      e.stopPropagation();
-      openExplanationPopover(coords, text, lastContext);
     };
     toolbar.querySelector('#readanki-btn-tts').onclick = (e) => {
       e.stopPropagation();
@@ -218,6 +258,61 @@
       e.stopPropagation();
       removeToolbar();
     };
+  }
+
+  // ---------- 記事ごとの単語帳 ----------
+  // 選んだ語とその1文を、この記事の単語帳（端末内）に追加する。ここでは外部へ送信しない。
+  function addToWordbook(word, context) {
+    const value = String(word || '').replace(/\s+/g, ' ').trim();
+    // プライベートブラウジング中のデータは保存しない（Firefox Add-on Policies 6.3）。
+    if (chrome.extension?.inIncognitoContext) {
+      showWordbookToast('プライベートウィンドウでは単語帳に保存しません。');
+      return;
+    }
+    if (value.length > 60) {
+      showWordbookToast('単語帳には、単語・熟語（60文字まで）を選んで追加してください。');
+      return;
+    }
+    chrome.runtime.sendMessage(
+      { action: 'addWordbookWord', word: value, context, title: document.title },
+      (res) => {
+        if (isStale()) return;
+        if (!res?.success) {
+          showWordbookToast('単語帳に追加できませんでした: ' + (res?.error || '不明なエラー'));
+          return;
+        }
+        removeToolbar();
+        showWordbookToast(
+          res.duplicate ? `「${value}」は登録済みです（この記事: ${res.count}語）` : `「${value}」を単語帳に追加しました（この記事: ${res.count}語）`,
+          res.page
+        );
+      }
+    );
+  }
+
+  let wordbookToast = null;
+  let wordbookToastTimer = null;
+
+  function showWordbookToast(message, page) {
+    if (wordbookToast) wordbookToast.remove();
+    clearTimeout(wordbookToastTimer);
+    wordbookToast = document.createElement('div');
+    wordbookToast.className = 'readanki-wordbook-toast';
+    const text = document.createElement('span');
+    text.textContent = message;
+    wordbookToast.appendChild(text);
+    if (page) {
+      const open = document.createElement('button');
+      open.type = 'button';
+      open.textContent = '単語帳を開く';
+      open.onclick = () => chrome.runtime.sendMessage({ action: 'openWordbook', page });
+      wordbookToast.appendChild(open);
+    }
+    document.body.appendChild(wordbookToast);
+    wordbookToastTimer = setTimeout(() => {
+      wordbookToast?.remove();
+      wordbookToast = null;
+    }, 4000);
   }
 
   function removeToolbar() {
@@ -364,22 +459,8 @@
           <div class="rk-vocabulary-list" id="rk-vocabulary-list"></div>
         </div>
         <div class="footer-actions rk-actions" id="rk-actions" style="display:none;">
-          <button class="rk-edit-toggle" id="rk-edit-toggle" type="button">✎ 編集・カード形式</button>
           <button class="rk-paraphrase-btn" id="rk-paraphrase-btn" type="button">🔄 言い換え</button>
           <button class="rk-save-history-btn" id="rk-save-history-btn" type="button" title="この解析結果をこの端末の履歴に保存します（保存しなければ残りません）">💾 履歴に保存</button>
-          <span class="rk-anki-wrap">
-            <button class="btn-add" id="rk-anki-btn" type="button">Ankiに追加（試験中）</button>
-            <small class="rk-beta-note">Anki追加は試験中の機能です</small>
-          </span>
-        </div>
-        <div class="rk-edit-fields" id="rk-edit-fields">
-          <div class="rk-cardtype">
-            <label><input type="radio" name="rk-cardtype" value="vocab-cloze" checked> 語彙Cloze（手修正必須）</label>
-            <label><input type="radio" name="rk-cardtype" value="grammar"> Grammar（文法学習）</label>
-            <label><input type="radio" name="rk-cardtype" value="en-ja"> 英日（英→和）</label>
-            <label><input type="radio" name="rk-cardtype" value="ja-en"> 日英（和→英）</label>
-          </div>
-          <div class="rk-anki-fields" id="rk-anki-fields" aria-live="polite"></div>
         </div>
       </div>
     </div>
@@ -486,7 +567,7 @@
     document.body.appendChild(popover);
     readankiTip = popover.querySelector('#rk-tip');
 
-    const w = 460;
+    const w = Math.min(460, window.innerWidth - 20);
     let left = coords.x - w / 2;
     if (left < 10) left = 10;
     if (left + w > window.innerWidth - 10) left = window.innerWidth - w - 10;
@@ -677,6 +758,11 @@
       saveHistoryBtn.textContent = '✅ 履歴に保存済み';
     }
     if (entryId) markHistorySaved();
+    // プライベートブラウジング中のデータは保存しない（Firefox Add-on Policies 6.3）。
+    if (chrome.extension?.inIncognitoContext) {
+      saveHistoryBtn.disabled = true;
+      saveHistoryBtn.textContent = 'プライベートウィンドウでは履歴に保存しません';
+    }
     saveHistoryBtn.onclick = () => {
       if (entryId) return;
       saveHistoryBtn.disabled = true;
@@ -699,75 +785,6 @@
     };
 
     actionsEl.style.display = 'flex';
-
-    // Ankiの実フィールドを形式ごとに取得・保持し、HTML/Cloze記法を直接編集する。
-    const currentPopover = popover;
-    const editorEl = popover.querySelector('#rk-anki-fields');
-    const cardDrafts = {};
-    let activeCardType = 'vocab-cloze';
-
-    function saveActiveDraft() {
-      if (!cardDrafts[activeCardType]) return;
-      editorEl.querySelectorAll('textarea[data-anki-field]').forEach((field) => {
-        cardDrafts[activeCardType][field.dataset.ankiField] = field.value;
-      });
-    }
-
-    function renderAnkiFields(cardType) {
-      const fields = cardDrafts[cardType];
-      if (!fields) return;
-      // 欄の並びと表示名（Ankiのフィールドへは background 側で役割と位置に合わせて当てはめる）
-      const FIELD_LAYOUT = {
-        'vocab-cloze': [['Text', '本文（穴埋め）', 4], ['Back Extra', '補足（裏面）', 8]],
-        'ja-en': [['Front', '日本語（表面）', 3], ['Back', '英文（入力の正解・文字のみ）', 3], ['Extra', '解説（裏面）', 8]],
-      };
-      const fieldLayout = FIELD_LAYOUT[cardType] || [['Front', '表面', 4], ['Back', '裏面', 8]];
-      editorEl.replaceChildren();
-      fieldLayout.forEach(([fieldName, labelText, rows]) => {
-        const label = document.createElement('label');
-        label.className = 'rk-anki-field-label';
-        label.textContent = labelText;
-        const textarea = document.createElement('textarea');
-        textarea.className = 'rk-anki-field-input';
-        textarea.dataset.ankiField = fieldName;
-        textarea.rows = rows;
-        textarea.value = String(fields[fieldName] || '');
-        textarea.addEventListener('input', () => {
-          cardDrafts[cardType][fieldName] = textarea.value;
-          updateAnkiButton();
-        });
-        label.appendChild(textarea);
-        editorEl.appendChild(label);
-      });
-    }
-
-    function loadAnkiFields(cardType) {
-      if (cardDrafts[cardType]) {
-        renderAnkiFields(cardType);
-        return;
-      }
-      editorEl.textContent = 'Ankiカード内容を準備中…';
-      chrome.runtime.sendMessage(
-        {
-          action: 'getAnkiFields',
-          card: { targetPhrase: phrase, contextSentence: context, explanation: data, cardType },
-        },
-        (result) => {
-          if (popover !== currentPopover || activeCardType !== cardType) return;
-          if (!result?.success || !result.fields) {
-            editorEl.textContent = `カード内容を取得できませんでした: ${result?.error || '不明なエラー'}`;
-            return;
-          }
-          cardDrafts[cardType] = { ...result.fields };
-          renderAnkiFields(cardType);
-        }
-      );
-    }
-
-    // 編集トグル
-    popover.querySelector('#rk-edit-toggle').onclick = () => {
-      popover.querySelector('#rk-edit-fields').classList.toggle('open');
-    };
 
     // 言い換えボタン
     popover.querySelector('#rk-paraphrase-btn').onclick = () => {
@@ -793,69 +810,6 @@
             }
           } else {
             alert('言い換えの取得に失敗しました: ' + (res?.error || '不明なエラー'));
-          }
-        }
-      );
-    };
-
-    popover.querySelectorAll('input[name="rk-cardtype"]').forEach((input) => {
-      input.addEventListener('change', () => {
-        if (!input.checked) return;
-        saveActiveDraft();
-        activeCardType = input.value;
-        loadAnkiFields(activeCardType);
-        updateAnkiButton();
-      });
-    });
-
-    loadAnkiFields(activeCardType);
-
-    // Anki追加: カード形式ごとに「追加済み」を記録し、同じ形式・同じ内容の二重登録だけを防ぐ。
-    // 別の形式を選ぶ、または編集欄の内容を変えると、また追加できる。
-    const addedSignatures = new Map();
-    const ankiBtn = popover.querySelector('#rk-anki-btn');
-    const ankiBtnLabel = ankiBtn.textContent;
-
-    function cardSignature(cardType) {
-      return JSON.stringify(cardDrafts[cardType] || null);
-    }
-
-    function updateAnkiButton() {
-      if (!ankiBtn.isConnected || ankiBtn.dataset.sending === 'true') return;
-      const alreadyAdded = addedSignatures.get(activeCardType) === cardSignature(activeCardType);
-      ankiBtn.disabled = alreadyAdded;
-      ankiBtn.textContent = alreadyAdded ? '✅ この形式は追加済み' : ankiBtnLabel;
-      ankiBtn.style.background = alreadyAdded ? '#10b981' : '';
-    }
-
-    popover.querySelector('#rk-anki-btn').onclick = () => {
-      const cardTypeEl = popover.querySelector('input[name="rk-cardtype"]:checked');
-      const cardType = cardTypeEl ? cardTypeEl.value : 'basic';
-      saveActiveDraft();
-      const fields = cardDrafts[cardType];
-      if (!fields) {
-        alert('Ankiカード内容の準備が完了してから追加してください。');
-        return;
-      }
-      const btn = ankiBtn;
-      const sentSignature = cardSignature(cardType);
-      btn.disabled = true;
-      btn.dataset.sending = 'true';
-      btn.textContent = 'Ankiに送信中…';
-      chrome.runtime.sendMessage(
-        {
-          action: 'addToAnki',
-          card: { targetPhrase: phrase, contextSentence: context, explanation: data, cardType, fields },
-        },
-        (ankiRes) => {
-          if (!btn.isConnected) return;
-          btn.dataset.sending = 'false';
-          if (ankiRes && ankiRes.success) {
-            addedSignatures.set(cardType, sentSignature);
-            updateAnkiButton();
-          } else {
-            updateAnkiButton();
-            alert('AnkiConnectエラー: ' + (ankiRes?.error || 'Ankiが起動しているか確認してください'));
           }
         }
       );

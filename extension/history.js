@@ -2,7 +2,6 @@ const listEl = document.getElementById('history-list');
 const searchEl = document.getElementById('search-input');
 const countEl = document.getElementById('history-count');
 const clearButton = document.getElementById('clear-history');
-const exportUnknownButton = document.getElementById('export-unknown');
 const generateSentenceQuizButton = document.getElementById('generate-sentence-quiz');
 let entries = [];
 
@@ -162,7 +161,6 @@ function updateQuizButton() {
   quizCountEl.textContent = String(count);
   quizOpenButton.style.display = count > 0 ? 'inline-flex' : 'none';
   generateSentenceQuizButton.style.display = chunks.length > 0 ? 'inline-flex' : 'none';
-  exportUnknownButton.style.display = count > 0 ? 'inline-flex' : 'none';
 }
 
 // HTMLエスケープ後の文字列に対してハイライトするため、
@@ -176,6 +174,66 @@ function highlightWord(sentence, word) {
   return escaped.replace(re, (m) => `<mark>${m}</mark>`);
 }
 
+// ★を付けた語を、履歴の文ごとにまとめる（1文＝1問。★の語はすべて穴にする）。
+function collectQuizSentences() {
+  const byEntry = new Map();
+  collectUnknownItems().forEach((item) => {
+    const entry = entries.find((e) => e.id === item.entryId);
+    if (!entry || !item.contextSentence) return;
+    if (!byEntry.has(entry.id)) {
+      byEntry.set(entry.id, {
+        entryId: entry.id,
+        sentence: item.contextSentence,
+        translation: entry.explanation?.sentenceTranslation || '',
+        words: [],
+      });
+    }
+    byEntry.get(entry.id).words.push(item);
+  });
+  return [...byEntry.values()];
+}
+
+// 文中で★の語が出てくる位置を探す。長い語を優先し、重なる位置は使わない。
+// 英単語の一部（"a" が "cat" の中に一致する等）にならないよう、語の端が英数字なら単語境界を求める。
+function findWordRanges(sentence, words) {
+  const ranges = [];
+  const sorted = words
+    .map((item, index) => ({ item, index }))
+    .sort((x, y) => y.item.word.trim().length - x.item.word.trim().length);
+  sorted.forEach(({ item, index }) => {
+    const w = item.word.trim();
+    if (!w) return;
+    const body = w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const re = new RegExp(`${/^\w/.test(w) ? '\\b' : ''}${body}${/\w$/.test(w) ? '\\b' : ''}`, 'gi');
+    let m;
+    while ((m = re.exec(sentence))) {
+      const start = m.index;
+      const end = start + m[0].length;
+      if (!ranges.some((r) => start < r.end && r.start < end)) ranges.push({ start, end, index });
+      if (m[0].length === 0) re.lastIndex += 1;
+    }
+  });
+  return ranges.sort((x, y) => x.start - y.start);
+}
+
+// 穴（番号付き）または答え（強調）にした文を、エスケープ済みHTMLで返す。
+function renderSentenceWithWords(question, reveal) {
+  const ranges = findWordRanges(question.sentence, question.words);
+  let html = '';
+  let pos = 0;
+  ranges.forEach((r) => {
+    html += escapeHtml(question.sentence.slice(pos, r.start));
+    const original = question.sentence.slice(r.start, r.end);
+    html += reveal
+      ? `<mark>${escapeHtml(original)}</mark>`
+      : `<span class="quiz-blank">（ ${r.index + 1} ）</span>`;
+    pos = r.end;
+  });
+  html += escapeHtml(question.sentence.slice(pos));
+  const found = new Set(ranges.map((r) => r.index));
+  return { html, missing: question.words.filter((_, i) => !found.has(i)) };
+}
+
 function renderQuizStep() {
   if (quizIndex >= quizItems.length) {
     quizProgressEl.textContent = '完了';
@@ -187,24 +245,30 @@ function renderQuizStep() {
     document.getElementById('quiz-finish').addEventListener('click', closeQuiz);
     return;
   }
-  const item = quizItems[quizIndex];
+  const question = quizItems[quizIndex];
+  const { html, missing } = renderSentenceWithWords(question, false);
   quizProgressEl.textContent = `${quizIndex + 1} / ${quizItems.length}`;
   quizBodyEl.innerHTML = `
-    <div class="quiz-sentence">${highlightWord(item.contextSentence, item.word)}</div>
+    <div class="quiz-sentence">${html}</div>
+    ${question.translation ? `<div class="quiz-translation">${escapeHtml(question.translation)}</div>` : ''}
+    ${missing.length ? `<div class="quiz-msg">文中で見つからなかった語が${missing.length}個あります（答えにだけ表示します）。</div>` : ''}
     <button class="quiz-reveal-btn" id="quiz-reveal">答えを見る</button>
-    <div class="quiz-msg"></div>
   `;
-  document.getElementById('quiz-reveal').addEventListener('click', () => showAnswer(item));
+  document.getElementById('quiz-reveal').addEventListener('click', () => showAnswer(question));
 }
 
-function showAnswer(item) {
+function showAnswer(question) {
+  const { html } = renderSentenceWithWords(question, true);
+  const answers = question.words.map((item, i) => `
+      <div class="quiz-answer-row">
+        <div class="quiz-answer-word">（ ${i + 1} ） ${escapeHtml(item.word)}</div>
+        ${item.pos ? `<div class="quiz-answer-pos">${escapeHtml(item.pos)}</div>` : ''}
+        <div class="quiz-answer-meaning">${escapeHtml(item.meaning)}</div>
+      </div>`).join('');
   quizBodyEl.innerHTML = `
-    <div class="quiz-sentence">${highlightWord(item.contextSentence, item.word)}</div>
-    <div class="quiz-answer">
-      <div class="quiz-answer-word">${escapeHtml(item.word)}</div>
-      ${item.pos ? `<div class="quiz-answer-pos">${escapeHtml(item.pos)}</div>` : ''}
-      <div class="quiz-answer-meaning">${escapeHtml(item.meaning)}</div>
-    </div>
+    <div class="quiz-sentence">${html}</div>
+    ${question.translation ? `<div class="quiz-translation">${escapeHtml(question.translation)}</div>` : ''}
+    <div class="quiz-answer">${answers}</div>
     <div class="quiz-actions">
       <button class="quiz-btn-forgot" id="quiz-forgot">忘れた (3分後)</button>
       <button class="quiz-btn-difficult" id="quiz-difficult">難しい (10分後)</button>
@@ -213,27 +277,21 @@ function showAnswer(item) {
     </div>
     <div class="quiz-msg" id="quiz-msg"></div>
   `;
-  document.getElementById('quiz-forgot').addEventListener('click', () => scheduleReview(item, 3 * 60 * 1000));
-  document.getElementById('quiz-difficult').addEventListener('click', () => scheduleReview(item, 10 * 60 * 1000));
-  document.getElementById('quiz-easy').addEventListener('click', () => scheduleReview(item, 3 * 60 * 60 * 1000));
-  document.getElementById('quiz-remembered').addEventListener('click', () => scheduleReview(item, 6 * 24 * 60 * 60 * 1000));
+  document.getElementById('quiz-forgot').addEventListener('click', () => scheduleReview(question, 3 * 60 * 1000));
+  document.getElementById('quiz-difficult').addEventListener('click', () => scheduleReview(question, 10 * 60 * 1000));
+  document.getElementById('quiz-easy').addEventListener('click', () => scheduleReview(question, 3 * 60 * 60 * 1000));
+  document.getElementById('quiz-remembered').addEventListener('click', () => scheduleReview(question, 6 * 24 * 60 * 60 * 1000));
 }
 
-async function scheduleReview(item, delayMs) {
+// 1文の中の★の語すべてに、同じ復習予定を付ける。
+async function scheduleReview(question, delayMs) {
   const reviewTime = Date.now() + delayMs;
-  
-  // Store review schedule in entry metadata
-  const entry = entries.find((e) => e.id === item.entryId);
+  const entry = entries.find((e) => e.id === question.entryId);
   if (!entry) return;
-  
   if (!entry.reviewSchedule) entry.reviewSchedule = {};
-  entry.reviewSchedule[item.word] = reviewTime;
-  
-  // Update storage
+  question.words.forEach((item) => { entry.reviewSchedule[item.word] = reviewTime; });
   try {
     await chrome.storage.local.set({ [`history:${entry.id}`]: entry });
-    
-    // Move to next question
     quizIndex += 1;
     renderQuizStep();
   } catch (err) {
@@ -242,55 +300,8 @@ async function scheduleReview(item, delayMs) {
   }
 }
 
-async function markKnown(item) {
-  const res = await chrome.runtime.sendMessage({
-    action: 'toggleUnknownWord',
-    entryId: item.entryId,
-    word: item.word,
-    unknown: false,
-  });
-  if (!res || !res.success) {
-    const msg = document.getElementById('quiz-msg');
-    if (msg) msg.textContent = '未知語の解除に失敗しました: ' + (res?.error || '不明なエラー');
-    return;
-  }
-  const entry = entries.find((e) => e.id === item.entryId);
-  if (entry) entry.unknownWords = res.unknownWords;
-  quizItems = quizItems.filter((_, i) => i !== quizIndex);
-  updateQuizButton();
-  render();
-  renderQuizStep();
-}
-
-// 現状はAnki設計未整理のため、単語専用カードではなく既存のBasicノート
-// （英文＋文訳＋文法解説）をそのまま流用する。Clozeは buildClozeNote 側の
-// 既知バグ（編集済みfieldsが無視される）を踏むため、ここではBasic固定にしている。
-async function sendToAnki(item, btn) {
-  const entry = entries.find((e) => e.id === item.entryId);
-  if (!entry) return;
-  btn.disabled = true;
-  btn.textContent = '送信中…';
-  const res = await chrome.runtime.sendMessage({
-    action: 'addToAnki',
-    card: {
-      targetPhrase: entry.targetPhrase,
-      contextSentence: entry.contextSentence,
-      explanation: entry.explanation,
-      cardType: 'basic',
-    },
-  });
-  if (res && res.success) {
-    btn.textContent = '✅ 追加済み';
-  } else {
-    btn.textContent = '📥 この例文をAnkiに追加';
-    btn.disabled = false;
-    const msg = document.getElementById('quiz-msg');
-    if (msg) msg.textContent = 'Anki追加に失敗しました: ' + (res?.error || 'Ankiが起動しているか確認してください');
-  }
-}
-
 function openQuiz() {
-  quizItems = collectUnknownItems();
+  quizItems = collectQuizSentences();
   quizIndex = 0;
   quizOverlay.style.display = 'flex';
   renderQuizStep();
@@ -442,80 +453,3 @@ async function markKnownInSentenceQuiz(item) {
   render();
   renderSentenceQuizStep();
 }
-
-async function sendSentenceToAnki(item, btn) {
-  const entry = entries.find((e) => e.id === item.entryId);
-  if (!entry) return;
-  
-  // 生成された例文を使用してAnkiカードを作成
-  const modifiedExplanation = {
-    ...entry.explanation,
-    sentenceTranslation: item.generatedSentence || entry.explanation.sentenceTranslation
-  };
-  
-  btn.disabled = true;
-  btn.textContent = '送信中…';
-  
-  const res = await chrome.runtime.sendMessage({
-    action: 'addToAnki',
-    card: {
-      targetPhrase: item.word,
-      contextSentence: item.generatedSentence || entry.contextSentence,
-      explanation: modifiedExplanation,
-      cardType: 'vocab-cloze',
-    },
-  });
-  
-  if (res && res.success) {
-    btn.textContent = '✅ 追加済み';
-  } else {
-    btn.textContent = '📥 この例文をAnkiに追加';
-    btn.disabled = false;
-    const msg = document.getElementById('quiz-msg');
-    if (msg) msg.textContent = 'Anki追加に失敗しました: ' + (res?.error || 'Ankiが起動しているか確認してください');
-  }
-}
-
-// ==================== 未知語エクスポート ====================
-exportUnknownButton.addEventListener('click', async () => {
-  const items = collectUnknownItems();
-  if (!items.length) return;
-  
-  if (!confirm(`${items.length}件の未知語をAnkiにエクスポートしますか？\n各未知語の例文が含まれるカードを追加します。`)) return;
-  
-  exportUnknownButton.disabled = true;
-  exportUnknownButton.textContent = 'エクスポート中…';
-  
-  let successCount = 0;
-  let failCount = 0;
-  
-  for (const item of items) {
-    try {
-      const entry = entries.find((e) => e.id === item.entryId);
-      if (!entry) continue;
-      
-      const res = await chrome.runtime.sendMessage({
-        action: 'addToAnki',
-        card: {
-          targetPhrase: entry.targetPhrase,
-          contextSentence: entry.contextSentence,
-          explanation: entry.explanation,
-          cardType: 'vocab-cloze',
-        },
-      });
-      
-      if (res && res.success) {
-        successCount++;
-      } else {
-        failCount++;
-      }
-    } catch (err) {
-      failCount++;
-    }
-  }
-  
-  exportUnknownButton.disabled = false;
-  exportUnknownButton.textContent = '📥 未知語をAnkiにエクスポート';
-  
-  alert(`エクスポート完了:\n成功: ${successCount}件\n失敗: ${failCount}件`);
-});

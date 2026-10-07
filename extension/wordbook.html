@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ReadAnki 単語帳</title>
+  <link rel="stylesheet" href="history.css">
+  <link rel="stylesheet" href="wordbook.css">
+</head>
+<body>
+  <main class="app-shell">
+    <header class="page-header">
+      <div>
+        <p class="eyebrow">READANKI</p>
+        <h1 id="wb-heading">記事ごとの単語帳</h1>
+        <p class="subtitle" id="wb-subtitle">記事を読みながら「＋単語」で集めた語を、記事ごとに見返せます。</p>
+      </div>
+      <a class="button" id="wb-back" href="wordbook.html">← 単語帳の一覧</a>
+    </header>
+
+    <section class="wb-actions" id="wb-actions" hidden>
+      <a class="button" id="wb-open-page" target="_blank" rel="noopener noreferrer">記事を開く</a>
+      <button class="button wb-primary" id="wb-define" type="button">✨ AIで意味を付ける</button>
+      <label class="wb-hide"><input type="checkbox" id="wb-hide-meaning"> 意味を隠す（押すと表示）</label>
+      <button class="button button-danger" id="wb-delete-book" type="button">この単語帳を削除</button>
+    </section>
+    <p class="wb-msg" id="wb-msg" role="status"></p>
+
+    <div id="wb-content" class="history-list" aria-live="polite"></div>
+  </main>
+  <script src="wordbook.js"></script>
+</body>
+</html>

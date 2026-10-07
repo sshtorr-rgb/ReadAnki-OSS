@@ -17,6 +17,59 @@
   to { opacity: 1; transform: translateY(0); }
 }
 
+.readanki-collapsed-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.readanki-word-trigger {
+  background: #0f172a;
+  color: #f8fafc;
+  border: 1px solid rgba(71, 85, 105, 0.8);
+  border-radius: 9999px;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+  animation: readankiFadeIn 0.15s ease-out;
+}
+
+.readanki-word-trigger:hover {
+  background: #1e293b;
+}
+
+.readanki-wordbook-toast {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 2147483647;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: min(420px, calc(100vw - 32px));
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: #0f172a;
+  color: #f8fafc;
+  font: 13px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans JP", sans-serif;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+  animation: readankiFadeIn 0.15s ease-out;
+}
+
+.readanki-wordbook-toast button {
+  flex: 0 0 auto;
+  border: 1px solid #3b82f6;
+  border-radius: 7px;
+  background: transparent;
+  color: #93c5fd;
+  padding: 4px 9px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
 .readanki-dot-trigger {
   display: inline-flex;
   align-items: center;
@@ -360,19 +413,6 @@
 .readanki-card-v3 .rk-vocabulary-pos { color: var(--muted); font-size: 10.5px; white-space: nowrap; }
 .readanki-card-v3 .footer-actions { display: flex; justify-content: flex-end; margin-top: 4px; }
 .readanki-card-v3 .rk-actions { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
-.readanki-card-v3 .btn-add {
-  background: var(--role-v);
-  color: #fff;
-  border: none;
-  padding: 8px 18px;
-  border-radius: 8px;
-  font-size: 12.5px;
-  font-weight: 600;
-  cursor: pointer;
-}
-.readanki-card-v3 .btn-add:disabled { opacity: .6; cursor: default; }
-.readanki-card-v3 .rk-anki-wrap { display: inline-flex; flex-direction: column; align-items: flex-end; gap: 2px; }
-.readanki-card-v3 .rk-beta-note { font-size: 10.5px; color: var(--muted); }
 .readanki-card-v3 .rk-save-history-btn {
   background: none;
   border: 1px solid var(--muted);
@@ -383,48 +423,6 @@
   cursor: pointer;
 }
 .readanki-card-v3 .rk-save-history-btn:disabled { opacity: .7; cursor: default; }
-.readanki-card-v3 .rk-edit-toggle {
-  background: none;
-  border: none;
-  color: var(--muted);
-  cursor: pointer;
-  font-size: 11px;
-  text-decoration: underline;
-  padding: 0;
-}
-.readanki-card-v3 .rk-edit-toggle:hover { color: var(--ink-soft); }
-
-.readanki-card-v3 .rk-edit-fields {
-  display: none;
-  flex-direction: column;
-  gap: 8px;
-  padding-top: 10px;
-  border-top: 1px solid var(--line);
-}
-.readanki-card-v3 .rk-edit-fields.open { display: flex; }
-.readanki-card-v3 .rk-edit-fields textarea {
-  width: 100%;
-  box-sizing: border-box;
-  font-family: inherit;
-  font-size: 12px;
-  line-height: 1.6;
-  padding: 6px 9px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  resize: vertical;
-  color: var(--ink);
-  background: #fff;
-}
-.readanki-card-v3 .rk-edit-fields textarea:focus {
-  outline: none;
-  border-color: var(--role-v);
-  box-shadow: 0 0 0 3px var(--role-v-8);
-}
-.readanki-card-v3 .rk-cardtype { display: flex; gap: 14px; font-size: 11.5px; color: var(--ink-soft); }
-.readanki-card-v3 .rk-cardtype label { display: flex; align-items: center; gap: 4px; cursor: pointer; }
-.readanki-card-v3 .rk-anki-fields { display: flex; flex-direction: column; gap: 10px; color: var(--muted); font-size: 11.5px; }
-.readanki-card-v3 .rk-anki-field-label { display: flex; flex-direction: column; gap: 5px; color: var(--ink-soft); font-size: 11px; font-weight: 700; }
-.readanki-card-v3 .rk-edit-fields .rk-anki-field-input { min-height: 78px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 11px; line-height: 1.5; }
 
 .readanki-card-v3 .rk-loading {
   display: flex;
@@ -486,3 +484,16 @@
 .readanki-tip .t-word { font-size: 11px; font-weight: 700; color: #9db4f0; margin-bottom: 3px; }
 .readanki-tip .t-general { margin-bottom: 6px; }
 .readanki-tip .t-context { color: #c2c9d6; }
+
+/* スマホ（Firefox for Android）など狭い画面向け */
+@media (max-width: 520px) {
+  .readanki-toolbar-menu { flex-wrap: wrap; max-width: calc(100vw - 20px); }
+  .readanki-card-v3 { width: calc(100vw - 20px); min-width: 0; max-height: 80vh; font-size: 13.5px; }
+}
+
+/* タッチ操作向け: 押しやすい大きさにする */
+@media (pointer: coarse) {
+  .readanki-btn-mini { padding: 8px 10px; min-height: 36px; }
+  .readanki-card-v3 .rk-save-history-btn { min-height: 40px; }
+  .readanki-card-v3 .rk-unknown-toggle { min-width: 32px; min-height: 32px; }
+}

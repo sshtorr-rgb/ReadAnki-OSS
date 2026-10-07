@@ -1,5 +1,4 @@
 // ReadAnki Background Service Worker (UI v3 / 2-pass analysis)
-importScripts('anki-model.js');
 chrome.runtime.onInstalled.addListener((details) => {
   if (details.reason === 'install') {
     // データ処理の説明と同意を、最初の解析より前に確実に表示する。
@@ -18,22 +17,20 @@ chrome.runtime.onInstalled.addListener((details) => {
           geminiModel: 'gemini-3.1-flash-lite',
           openAiModel: 'gpt-4o-mini',
         },
+        // Firefox版はAnki連携を持たない。保存キー名は互換のため ankiConfig のまま（語義の表示方法だけを持つ）。
         ankiConfig: {
-          url: 'http://127.0.0.1:8765',
           wordDefinitionMode: 'llm-japanese',
-          // 4つのカード形式ごとのデッキ名・ノートタイプ名
-          ...ANKI_DEFAULTS,
-          tags: ['ReadAnki'],
-          allowDuplicate: false,
         },
       });
     }
   });
-  syncAllowedSiteScripts();
+  if (details.reason === 'update') cleanupLegacyAllowedSites();
+  // Firefox for Android には右クリックメニューが無い。
+  if (!chrome.contextMenus) return;
   chrome.contextMenus.removeAll(() => {
     chrome.contextMenus.create({
       id: 'readanki-explain-selection',
-      title: 'ReadAnki: 文法解説とAnki化',
+      title: 'ReadAnki: 文法解説',
       contexts: ['selection'],
     });
   });
@@ -51,69 +48,31 @@ async function ensureInjected(tabId) {
   await chrome.scripting.executeScript({ target: { tabId }, files: ['content.js'] });
 }
 
-// ============================================================
-// 許可サイト: 利用者が設定画面で登録し、個別に権限を許可したサイトだけで常に content script を動かす。
-// allowedSites（storage.local）と実際に許可されている権限の両方を満たすサイトだけを登録する。
-// ============================================================
-const ALLOWED_SITES_SCRIPT_ID = 'readanki-allowed-sites';
-
-function sitePatterns(host) {
-  return [`https://${host}/*`, `http://${host}/*`];
+// 旧版（3.0.5まで）の「常に有効にするサイト」を片付ける。登録済みの content script を外し、
+// そのために許可されたサイト権限も返す（外部のOpenAI互換サーバー用の許可は残す）。
+async function cleanupLegacyAllowedSites() {
+  try {
+    const existing = await chrome.scripting.getRegisteredContentScripts({ ids: ['readanki-allowed-sites'] });
+    if (existing.length) await chrome.scripting.unregisterContentScripts({ ids: ['readanki-allowed-sites'] });
+    const { allowedSites = [], llmConfig = {} } = await chrome.storage.local.get(['allowedSites', 'llmConfig']);
+    let endpointHost = null;
+    try {
+      if (llmConfig.provider === 'local-openai') endpointHost = new URL(llmConfig.localOpenAiUrl).hostname;
+    } catch {}
+    await chrome.storage.local.remove('allowedSites');
+    // manifest から外した http://*/* の許可は取り消せない（既に失効している）ため、今も持っているものだけを返す。
+    const granted = new Set((await chrome.permissions.getAll()).origins || []);
+    const origins = (Array.isArray(allowedSites) ? allowedSites : [])
+      .filter((host) => typeof host === 'string' && host && host !== endpointHost)
+      .flatMap((host) => [`https://${host}/*`, `http://${host}/*`])
+      .filter((origin) => granted.has(origin));
+    if (origins.length) await chrome.permissions.remove({ origins });
+  } catch (error) {
+    console.warn('ReadAnki: failed to clean up allowed sites', error);
+  }
 }
 
-async function grantedAllowedSites() {
-  const { allowedSites = [] } = await chrome.storage.local.get('allowedSites');
-  const sites = Array.isArray(allowedSites) ? allowedSites.filter((host) => typeof host === 'string' && host) : [];
-  const { origins = [] } = await chrome.permissions.getAll();
-  const granted = new Set(origins);
-  return sites
-    .map((host) => ({ host, matches: sitePatterns(host).filter((pattern) => granted.has(pattern)) }))
-    .filter((site) => site.matches.length);
-}
-
-let allowedSitesSyncQueue = Promise.resolve();
-
-function syncAllowedSiteScripts() {
-  const sync = async () => {
-    const sites = await grantedAllowedSites();
-    const matches = sites.flatMap((site) => site.matches);
-    const existing = await chrome.scripting.getRegisteredContentScripts({ ids: [ALLOWED_SITES_SCRIPT_ID] });
-    if (existing.length) await chrome.scripting.unregisterContentScripts({ ids: [ALLOWED_SITES_SCRIPT_ID] });
-    if (!matches.length) return;
-    await chrome.scripting.registerContentScripts([{
-      id: ALLOWED_SITES_SCRIPT_ID,
-      matches,
-      js: ['content.js'],
-      css: ['content.css'],
-      runAt: 'document_idle',
-      persistAcrossSessions: true,
-    }]);
-  };
-  allowedSitesSyncQueue = allowedSitesSyncQueue.then(sync, sync).catch((error) => {
-    console.warn('ReadAnki: failed to sync allowed sites', error);
-  });
-  return allowedSitesSyncQueue;
-}
-
-// chrome://extensions などで権限が取り消されたら、登録一覧からも外す。
-chrome.permissions.onRemoved.addListener(async ({ origins = [] }) => {
-  if (!origins.length) return;
-  const { allowedSites = [] } = await chrome.storage.local.get('allowedSites');
-  const remaining = (await chrome.permissions.getAll()).origins || [];
-  const stillGranted = new Set(remaining);
-  const next = (Array.isArray(allowedSites) ? allowedSites : []).filter((host) =>
-    sitePatterns(host).some((pattern) => stillGranted.has(pattern))
-  );
-  if (next.length !== allowedSites.length) await chrome.storage.local.set({ allowedSites: next });
-  syncAllowedSiteScripts();
-});
-chrome.permissions.onAdded.addListener(() => syncAllowedSiteScripts());
-chrome.storage.onChanged.addListener((changes, area) => {
-  if (area === 'local' && changes.allowedSites) syncAllowedSiteScripts();
-});
-chrome.runtime.onStartup.addListener(() => syncAllowedSiteScripts());
-
-chrome.contextMenus.onClicked.addListener(async (info, tab) => {
+chrome.contextMenus?.onClicked.addListener(async (info, tab) => {
   if (info.menuItemId !== 'readanki-explain-selection' || !tab?.id) return;
   try {
     await ensureInjected(tab.id);
@@ -126,7 +85,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   }
 });
 
-chrome.commands.onCommand.addListener(async (command, tab) => {
+chrome.commands?.onCommand.addListener(async (command, tab) => {
   if (command !== 'activate-readanki' || !tab?.id) return;
   try {
     await ensureInjected(tab.id);
@@ -135,13 +94,35 @@ chrome.commands.onCommand.addListener(async (command, tab) => {
   }
 });
 
+// ページ上の操作から外部のAIを呼ぶ回数を、タブごとに制限する。
+// ページ側のスクリプトがReadAnkiのボタンを連打させても、利用者のAPIキーで際限なく課金されないようにする。
+const PAGE_CALL_LIMIT = 30;
+const PAGE_CALL_WINDOW_MS = 60 * 1000;
+const PAGE_CALL_LIMIT_ERROR = { success: false, error: '短時間にAIへの送信が多すぎるため、一時的に止めています。1分ほど待ってから試してください。' };
+const pageCallLog = new Map();
+
+function overPageCallLimit(sender) {
+  const tabId = sender?.tab?.id;
+  if (tabId === undefined) return false;
+  const now = Date.now();
+  const recent = (pageCallLog.get(tabId) || []).filter((time) => now - time < PAGE_CALL_WINDOW_MS);
+  const over = recent.length >= PAGE_CALL_LIMIT;
+  if (!over) recent.push(now);
+  pageCallLog.set(tabId, recent);
+  return over;
+}
+
+chrome.tabs.onRemoved.addListener((tabId) => pageCallLog.delete(tabId));
+
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === 'explain') {
+    if (overPageCallLimit(sender)) { sendResponse(PAGE_CALL_LIMIT_ERROR); return false; }
     handleExplain(request).then(sendResponse);
     return true;
   }
 
   if (request.action === 'explainImage') {
+    if (overPageCallLimit(sender)) { sendResponse(PAGE_CALL_LIMIT_ERROR); return false; }
     handleExplainImage(request).then(sendResponse);
     return true;
   }
@@ -149,6 +130,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === 'saveHistory') {
     // 解析カード（content script）の「履歴に保存」ボタンからのみ受け付ける。
     if (!sender.tab) return false;
+    // プライベートブラウジング中のデータは保存しない（Firefox Add-on Policies 6.3）。
+    if (sender.tab.incognito) {
+      sendResponse({ success: false, error: 'プライベートウィンドウでは履歴を保存できません' });
+      return false;
+    }
     handleSaveHistory(request).then(sendResponse);
     return true;
   }
@@ -158,28 +144,38 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
   }
 
-  if (request.action === 'addToAnki') {
-    handleAddToAnki(request).then(sendResponse);
-    return true;
-  }
-
-  if (request.action === 'getAnkiFields') {
-    handleGetAnkiFields(request).then(sendResponse);
-    return true;
-  }
-
-  if (request.action === 'getWordDefinition') {
-    handleGetWordDefinition(request).then(sendResponse);
-    return true;
-  }
-
   if (request.action === 'getParaphrase') {
+    if (overPageCallLimit(sender)) { sendResponse(PAGE_CALL_LIMIT_ERROR); return false; }
     handleGetParaphrase(request).then(sendResponse);
     return true;
   }
 
   if (request.action === 'generateExampleSentences') {
     handleGenerateExampleSentences(request).then(sendResponse);
+    return true;
+  }
+
+  if (request.action === 'addWordbookWord') {
+    // ページ上の「＋単語」ボタン（content script）からのみ受け付ける。記事のURLは送信元のフレームから取る。
+    if (!sender.tab || !sender.url) return false;
+    // プライベートブラウジング中のデータは保存しない（Firefox Add-on Policies 6.3）。
+    if (sender.tab.incognito) {
+      sendResponse({ success: false, error: 'プライベートウィンドウでは単語帳に保存しません' });
+      return false;
+    }
+    handleAddWordbookWord(request, sender.url).then(sendResponse);
+    return true;
+  }
+
+  if (request.action === 'defineWordbookWords') {
+    handleDefineWordbookWords(request).then(sendResponse);
+    return true;
+  }
+
+  if (request.action === 'openWordbook') {
+    const page = typeof request.page === 'string' ? request.page : '';
+    chrome.tabs.create({ url: chrome.runtime.getURL(`wordbook.html${page ? `#page=${encodeURIComponent(page)}` : ''}`) });
+    sendResponse({ success: true });
     return true;
   }
 
@@ -273,14 +269,6 @@ async function getDiagnostic() {
   return { success: true, version: chrome.runtime.getManifest().version, lastDiagnostic };
 }
 
-function escapeHtml(value) {
-  return String(value ?? '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
-
 function parseJsonContent(raw) {
   let content = String(raw || '{}').trim();
   // reasoningモデル(DeepSeek-R1系など)が付与する<think>...</think>を除去。
@@ -318,9 +306,7 @@ Analyze the target English sentence or phrase and return STRICT JSON with this s
   "structureBreakdown": [{"chunk": "英文", "role": "S/V/O/C/M", "note": "解説"}],
   "grammarPoint": "実践的な構文・文法の解説",
   "nuanceNotes": "ニュアンス解説",
-  "keyVocabulary": [{"word": "word", "meaning": "${vocabMeaningLabel}", "pos": "pos"}],
-  "ankiFront": "表面HTML",
-  "ankiBack": "裏面HTML"
+  "keyVocabulary": [{"word": "word", "meaning": "${vocabMeaningLabel}", "pos": "pos"}]
 }
 ${vocabInstruction}
 Target: ${JSON.stringify(text)}
@@ -348,9 +334,7 @@ The user supplied a screenshot. First, accurately read the most prominent Englis
   "structureBreakdown": [{"chunk": "英文", "role": "S/V/O/C/M", "note": "解説"}],
   "grammarPoint": "実践的な構文・文法の解説",
   "nuanceNotes": "ニュアンス解説",
-  "keyVocabulary": [{"word": "word", "meaning": "${vocabMeaningLabel}", "pos": "pos"}],
-  "ankiFront": "表面HTML",
-  "ankiBack": "裏面HTML"
+  "keyVocabulary": [{"word": "word", "meaning": "${vocabMeaningLabel}", "pos": "pos"}]
 }
 ${vocabInstruction}
 If no readable English text exists, return valid JSON with an empty targetPhrase and explain why in grammarPoint.
@@ -574,39 +558,6 @@ async function askLlmWithImage(prompt, image, config) {
 }
 
 // ============================================================
-// 単語定義取得
-// ============================================================
-async function handleGetWordDefinition(request) {
-  const { word } = request;
-  if (!word) return { success: false, error: '単語が指定されていません' };
-  
-  const ankiConfig = (await chrome.storage.local.get(['ankiConfig'])).ankiConfig || {};
-  const mode = ankiConfig.wordDefinitionMode || 'llm-japanese';
-  
-  try {
-    await requirePrivacyConsent();
-    
-    if (mode === 'llm-japanese') {
-      const config = await getLlmConfig();
-      const prompt = `Provide a Japanese definition for the English word "${word}". Return JSON with this schema: {"word": "${word}", "definition": "Japanese definition", "example": "example sentence"}. Return ONLY valid JSON.`;
-      const data = await askLlm(prompt, config);
-      return { success: true, mode: 'llm-japanese', data };
-    } else if (mode === 'llm-paraphrase') {
-      const config = await getLlmConfig();
-      const prompt = `Provide an English paraphrase (simpler explanation) for the word "${word}". Return JSON with this schema: {"word": "${word}", "paraphrase": "English paraphrase", "example": "example sentence"}. Return ONLY valid JSON.`;
-      const data = await askLlm(prompt, config);
-      return { success: true, mode: 'llm-paraphrase', data };
-    } else if (mode === 'external-link') {
-      const link = `https://dictionary.cambridge.org/dictionary/english/${encodeURIComponent(word)}`;
-      return { success: true, mode: 'external-link', data: { word, link } };
-    }
-  } catch (err) {
-    await recordDiagnostic('word-definition', mode, err.message);
-    return { success: false, error: err.message };
-  }
-}
-
-// ============================================================
 // 言い換え（Paraphrase）取得
 // ============================================================
 async function handleGetParaphrase(request) {
@@ -788,323 +739,104 @@ function handleToggleUnknownWord(request) {
 }
 
 // ============================================================
-// Anki連携（4ノートタイプ対応）
+// 記事ごとの単語帳: 利用者が「＋単語」で選んだ語を、記事（ページURL）ごとに端末内へ保存する。
+// 保存時は外部へ送信しない。意味（英英・和訳・例文）は単語帳画面で利用者が押したときだけLLMで作る。
 // ============================================================
-// 初期値（設定画面・インストール時・カード作成時で共通）
-const ANKI_DEFAULTS = {
-  vocabClozeDeckName: 'AnkiRead::Vocab-Cloze',
-  vocabClozeModelName: '穴埋め問題',
-  grammarDeckName: 'AnkiRead::Grammar',
-  grammarModelName: '基本',
-  enJaDeckName: 'AnkiRead::EN-JP',
-  enJaModelName: '基本',
-  jaEnDeckName: 'AnkiRead::JP-EN',
-  jaEnModelName: '基本 (文字入力解答)',
-};
+const WORDBOOK_PAGE_LIMIT = 300;
+const WORDBOOK_WORD_LIMIT = 200;
+const MAX_WORDBOOK_WORD_CHARS = 60;
+const TRACKING_PARAMS = /^(utm_\w+|fbclid|gclid|mc_cid|mc_eid|ref|ref_src)$/i;
+let wordbookWriteQueue = Promise.resolve();
 
-// ---------- カードの書式 ----------
-// 文字色は指定しない（Ankiの夜間モードでもそのまま読めるように）。強調は半透明の背景と下線で表す。
-const CARD_STYLE = {
-  front: 'text-align: center; font-size: 1.45em; line-height: 1.75; padding: 0.3em 0.2em;',
-  back: 'text-align: left; max-width: 34em; margin: 0 auto; line-height: 1.7;',
-  label: 'display: block; font-size: 0.7em; letter-spacing: 0.08em; opacity: 0.55; margin-bottom: 0.15em;',
-  section: 'margin: 0 0 0.9em;',
-  main: 'font-size: 1.2em; font-weight: 600;',
-  sub: 'font-size: 0.95em; opacity: 0.88;',
-  mark: 'background: rgba(37, 99, 235, 0.14); border-bottom: 2px solid rgba(37, 99, 235, 0.75); border-radius: 3px; padding: 0 0.12em; font-weight: 600;',
-  chip: 'display: inline-block; margin: 0.15em 0.3em 0.15em 0; padding: 0.05em 0.55em; border: 1px solid rgba(128, 128, 128, 0.35); border-radius: 999px; font-size: 0.88em;',
-  role: 'margin-left: 0.4em; font-size: 0.72em; font-weight: 700; opacity: 0.6;',
-};
-
-// 文脈の中の対象フレーズを強調表示した HTML を返す（各カードで共用）。
-function highlightPhraseInContext(context, phrase) {
-  const idx = phrase ? context.indexOf(phrase) : -1;
-  return idx === -1
-    ? escapeHtml(context)
-    : `${escapeHtml(context.slice(0, idx))}<span style="${CARD_STYLE.mark}">${escapeHtml(phrase)}</span>${escapeHtml(context.slice(idx + phrase.length))}`;
-}
-
-function cardFront(innerHtml) {
-  return `<div style="${CARD_STYLE.front}">${innerHtml}</div>`;
-}
-
-function cardSection(label, innerHtml, kind = 'sub') {
-  if (!htmlToPlainText(innerHtml)) return '';
-  return `<div style="${CARD_STYLE.section}"><span style="${CARD_STYLE.label}">${label}</span><div style="${CARD_STYLE[kind]}">${innerHtml}</div></div>`;
-}
-
-function cardBack(sections) {
-  return `<div style="${CARD_STYLE.back}">${sections.join('')}</div>`;
-}
-
-function breakdownChips(breakdown) {
-  return (Array.isArray(breakdown) ? breakdown : [])
-    .map((b) => `<span style="${CARD_STYLE.chip}">${escapeHtml(b.chunk)}<span style="${CARD_STYLE.role}">${escapeHtml(b.role)}</span></span>`)
-    .join('');
-}
-
-function vocabularyList(vocabulary) {
-  return (Array.isArray(vocabulary) ? vocabulary : [])
-    .map((v) => `<b>${escapeHtml(v.word)}</b>${v.pos ? ` <span style="opacity: 0.6;">(${escapeHtml(v.pos)})</span>` : ''} ${escapeHtml(v.meaning)}`)
-    .join('<br>');
-}
-
-function noteFromFields(ankiConfig, deckKey, modelKey, card, generatedFields, tags, allowDuplicate) {
-  const fields = card.fields && typeof card.fields === 'object' ? card.fields : generatedFields;
-  return {
-    deckName: ankiConfig[deckKey] || ANKI_DEFAULTS[deckKey],
-    modelName: ankiConfig[modelKey] || ANKI_DEFAULTS[modelKey],
-    fields,
-    options: { allowDuplicate },
-    tags,
-  };
-}
-
-function buildVocabClozeNote(ankiConfig, card, tags, allowDuplicate) {
-  const exp = card.explanation || {};
-  const phrase = card.targetPhrase || '';
-  const context = card.contextSentence || phrase;
-  const generatedFields = {
-    Text: cardFront(`{{c1::${escapeHtml(phrase)}}}`),
-    'Back Extra': cardBack([
-      cardSection('文脈', highlightPhraseInContext(context, phrase)),
-      cardSection('訳', escapeHtml(exp.sentenceTranslation)),
-      cardSection('重要語彙', vocabularyList(exp.keyVocabulary)),
-    ]),
-  };
-  return noteFromFields(ankiConfig, 'vocabClozeDeckName', 'vocabClozeModelName', card, generatedFields, tags, allowDuplicate);
-}
-
-function buildGrammarNote(ankiConfig, card, tags, allowDuplicate) {
-  const exp = card.explanation || {};
-  const phrase = card.targetPhrase || '';
-  const context = card.contextSentence || phrase;
-  // 表: 例文（問い）、裏: 文法ポイント（答え）
-  const generatedFields = {
-    Front: cardFront(highlightPhraseInContext(context, phrase)),
-    Back: cardBack([
-      cardSection('文法ポイント', escapeHtml(exp.grammarPoint), 'main'),
-      cardSection('訳', escapeHtml(exp.sentenceTranslation)),
-      cardSection('構文', breakdownChips(exp.structureBreakdown)),
-    ]),
-  };
-  return noteFromFields(ankiConfig, 'grammarDeckName', 'grammarModelName', card, generatedFields, tags, allowDuplicate);
-}
-
-function buildEnJaNote(ankiConfig, card, tags, allowDuplicate) {
-  const exp = card.explanation || {};
-  const phrase = card.targetPhrase || '';
-  const context = card.contextSentence || phrase;
-  // 表: 英文、裏: 和訳
-  const generatedFields = {
-    Front: cardFront(highlightPhraseInContext(context, phrase)),
-    Back: cardBack([
-      cardSection('和訳', escapeHtml(exp.sentenceTranslation), 'main'),
-      cardSection('文法', escapeHtml(exp.grammarPoint)),
-    ]),
-  };
-  return noteFromFields(ankiConfig, 'enJaDeckName', 'enJaModelName', card, generatedFields, tags, allowDuplicate);
-}
-
-function buildJaEnNote(ankiConfig, card, tags, allowDuplicate) {
-  const exp = card.explanation || {};
-  const phrase = card.targetPhrase || '';
-  const context = card.contextSentence || phrase;
-  // 表: 和訳、裏: 英文（入力型では照合の正解になるため、HTMLを含まない英文だけにする）、解説は別フィールド
-  const generatedFields = {
-    Front: cardFront(escapeHtml(exp.sentenceTranslation || '')),
-    Back: context,
-    Extra: cardBack([
-      cardSection('対象の表現', highlightPhraseInContext(phrase, phrase)),
-      cardSection('文法', escapeHtml(exp.grammarPoint)),
-      cardSection('構文', breakdownChips(exp.structureBreakdown)),
-    ]),
-  };
-  return noteFromFields(ankiConfig, 'jaEnDeckName', 'jaEnModelName', card, generatedFields, tags, allowDuplicate);
-}
-
-async function handleGetAnkiFields(request) {
-  const ankiConfig = (await chrome.storage.local.get(['ankiConfig'])).ankiConfig || {};
-  const card = request.card || {};
-  const cardType = card.cardType || 'vocab-cloze';
-  
-  let note;
-  switch (cardType) {
-    case 'vocab-cloze':
-      note = buildVocabClozeNote(ankiConfig, card, [], false);
-      break;
-    case 'grammar':
-      note = buildGrammarNote(ankiConfig, card, [], false);
-      break;
-    case 'en-ja':
-      note = buildEnJaNote(ankiConfig, card, [], false);
-      break;
-    case 'ja-en':
-      note = buildJaEnNote(ankiConfig, card, [], false);
-      break;
-    default:
-      note = buildVocabClozeNote(ankiConfig, card, [], false);
-  }
-  
-  return { success: true, cardType, fields: note.fields };
-}
-
-async function ankiConnect(endpoint, action, params = {}) {
-  const res = await fetch(endpoint, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ action, version: 6, params }),
+// 同じ記事を同じ単語帳にまとめるため、ページ内リンク（#）と追跡用パラメータを除いたURLを鍵にする。
+function wordbookPageKey(rawUrl) {
+  const url = new URL(rawUrl);
+  if (!['http:', 'https:'].includes(url.protocol)) throw new Error('通常のウェブページでのみ使えます。');
+  url.hash = '';
+  [...url.searchParams.keys()].forEach((key) => {
+    if (TRACKING_PARAMS.test(key)) url.searchParams.delete(key);
   });
-  if (!res.ok) {
-    const errText = await res.text().catch(() => '');
-    throw new Error(`AnkiConnectエラー (HTTP ${res.status}): ${errText || res.statusText}`);
-  }
-  const data = await res.json();
-  if (data.error) throw new Error(data.error);
-  return data.result;
+  return url.toString();
 }
 
-// ReadAnki の論理フィールドの並び順（穴埋め: 本文→補足、日英: 日本語→英文→解説、その他: 表→裏）。
-function logicalFieldOrder(cardType) {
-  if (cardType === 'vocab-cloze') return ['Text', 'Back Extra'];
-  if (cardType === 'ja-en') return ['Front', 'Back', 'Extra'];
-  return ['Front', 'Back'];
-}
-
-function htmlToPlainText(html) {
-  return String(html || '')
-    .replace(/<br\s*\/?>/gi, ' ')
-    .replace(/<[^>]*>/g, '')
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-// ノートタイプの実際のフィールド名と種類（穴埋め型・入力型）を調べる。
-async function getModelInfo(endpoint, modelName) {
-  let fields;
-  try {
-    fields = await ankiConnect(endpoint, 'modelFieldNames', { modelName });
-  } catch (error) {
-    if (/model was not found/i.test(error.message)) {
-      throw new Error(`Ankiにノートタイプ「${modelName}」が見つかりません。ReadAnkiの設定で、Ankiにあるノートタイプ名を指定してください。`);
+function handleAddWordbookWord(request, senderUrl) {
+  const write = async () => {
+    const word = String(request.word || '').replace(/\s+/g, ' ').trim();
+    if (!word) return { success: false, error: '単語を選択してください。' };
+    if (word.length > MAX_WORDBOOK_WORD_CHARS) {
+      return { success: false, error: `単語・熟語は${MAX_WORDBOOK_WORD_CHARS}文字までです。` };
     }
-    throw error;
-  }
-  if (!Array.isArray(fields) || !fields.length) {
-    throw new Error(`ノートタイプ「${modelName}」のフィールドを取得できませんでした。`);
-  }
-  let templateText = '';
-  try {
-    const templates = await ankiConnect(endpoint, 'modelTemplates', { modelName });
-    templateText = Object.values(templates || {}).map((t) => `${t.Front || ''}\n${t.Back || ''}`).join('\n');
-  } catch {
-    // 古い AnkiConnect でテンプレートを取れない場合は、通常型として扱う。
-  }
-  const clozeField = (templateText.match(/\{\{cloze:([^}]+)\}\}/) || [])[1]?.trim();
-  const typeField = (templateText.match(/\{\{type:(?:cloze:)?([^}]+)\}\}/) || [])[1]?.trim();
-  return {
-    fields,
-    clozeField: fields.includes(clozeField) ? clozeField : null,
-    typeField: fields.includes(typeField) ? typeField : null,
-  };
-}
-
-// ReadAnki の論理フィールドを、ノートタイプの実フィールドへ当てはめる。
-// 名前が合わないと AnkiConnect が値を捨てて「empty」エラーになるため、名前ではなく役割と位置で対応させる。
-async function mapToModelFields(endpoint, modelName, cardType, fields) {
-  const values = logicalFieldOrder(cardType).map((key) => String(fields?.[key] ?? ''));
-  const info = await getModelInfo(endpoint, modelName);
-  const isClozeCard = cardType === 'vocab-cloze';
-
-  if (isClozeCard && !info.clozeField) {
-    throw new Error(`穴埋めカードの送り先「${modelName}」は穴埋め型のノートタイプではありません。設定の「Vocabulary Cloze ノートタイプ名」に穴埋め型（例: 穴埋め問題）を指定してください。`);
-  }
-  if (!isClozeCard && info.clozeField) {
-    throw new Error(`「${modelName}」は穴埋め型のノートタイプです。このカード形式には通常のノートタイプ（例: 基本）を指定してください。`);
-  }
-  if (isClozeCard && !/\{\{c\d+::/.test(values[0])) {
-    throw new Error('穴埋めカードの本文に {{c1::…}} がありません。「編集・カード形式」で穴埋めにする語を {{c1::語}} の形にしてください。');
-  }
-
-  const mapped = {};
-  const remaining = [...info.fields];
-  const take = (name) => {
-    const index = remaining.indexOf(name);
-    if (index !== -1) remaining.splice(index, 1);
-    return name;
-  };
-
-  if (isClozeCard) {
-    mapped[take(info.clozeField)] = values[0];
-    if (remaining.length) mapped[take(remaining[0])] = values[1];
-  } else if (info.typeField) {
-    // 入力型: 正解フィールドには HTML を含まない答えだけを入れる（解説を混ぜると常に不正解になる）。
-    mapped[take(info.typeField)] = htmlToPlainText(values[1]);
-    if (remaining.length) mapped[take(remaining[0])] = values[0];
-    if (values[2] && remaining.length) mapped[take(remaining[0])] = values[2];
-  } else {
-    values.forEach((value, i) => {
-      if (!value) return;
-      if (remaining.length) {
-        mapped[take(remaining[0])] = i === 1 && cardType === 'ja-en' ? `<div style="${CARD_STYLE.front}">${escapeHtml(value)}</div>` : value;
-      } else {
-        const last = info.fields[info.fields.length - 1];
-        mapped[last] = `${mapped[last] || ''}<hr>${value}`;
+    const page = wordbookPageKey(senderUrl);
+    const key = `wordbook:${page}`;
+    const { [key]: stored, wordbookIndex = [] } = await chrome.storage.local.get([key, 'wordbookIndex']);
+    const now = Date.now();
+    const book = stored || { page, title: '', createdAt: now, words: [] };
+    book.title = clampText(request.title || book.title || '', 200);
+    book.updatedAt = now;
+    const exists = book.words.some((item) => item.word.toLowerCase() === word.toLowerCase());
+    if (!exists) {
+      if (book.words.length >= WORDBOOK_WORD_LIMIT) {
+        return { success: false, error: `1つの記事に登録できるのは${WORDBOOK_WORD_LIMIT}語までです。` };
       }
-    });
-  }
-
-  if (!htmlToPlainText(mapped[info.fields[0]])) {
-    throw new Error(`カードの1番目の欄（Ankiの「${info.fields[0]}」）が空です。「編集・カード形式」で内容を入力してください。`);
-  }
-  return mapped;
+      book.words.push({ word, context: clampText(request.context || '', MAX_CONTEXT_CHARS), addedAt: now });
+    }
+    const others = (Array.isArray(wordbookIndex) ? wordbookIndex : []).filter((item) => item !== page);
+    // 満杯のときに古い記事を自動で消すと、ページ側のスクリプトに単語帳を消させる手口になるため、追加を断る。
+    if (others.length >= WORDBOOK_PAGE_LIMIT) {
+      return { success: false, error: `単語帳は${WORDBOOK_PAGE_LIMIT}記事までです。単語帳の一覧から、使わない記事の単語帳を削除してください。` };
+    }
+    await chrome.storage.local.set({ [key]: book, wordbookIndex: [page, ...others] });
+    return { success: true, page, count: book.words.length, duplicate: exists };
+  };
+  const run = () => write().catch((error) => ({ success: false, error: error.message }));
+  wordbookWriteQueue = wordbookWriteQueue.then(run, run);
+  return wordbookWriteQueue;
 }
 
-async function handleAddToAnki(request) {
-  const ankiConfig = (await chrome.storage.local.get(['ankiConfig'])).ankiConfig || {};
-  let endpoint;
-  const card = request.card || {};
-  const tags = Array.isArray(ankiConfig.tags) && ankiConfig.tags.length ? ankiConfig.tags : ['ReadAnki'];
-  const allowDuplicate = !!ankiConfig.allowDuplicate;
-
-  const CARD_TYPES = ['vocab-cloze', 'grammar', 'en-ja', 'ja-en'];
-  const cardType = CARD_TYPES.includes(card.cardType) ? card.cardType : 'vocab-cloze';
-  
-  let note;
-  switch (cardType) {
-    case 'vocab-cloze':
-      note = buildVocabClozeNote(ankiConfig, card, tags, allowDuplicate);
-      break;
-    case 'grammar':
-      note = buildGrammarNote(ankiConfig, card, tags, allowDuplicate);
-      break;
-    case 'en-ja':
-      note = buildEnJaNote(ankiConfig, card, tags, allowDuplicate);
-      break;
-    case 'ja-en':
-      note = buildJaEnNote(ankiConfig, card, tags, allowDuplicate);
-      break;
-    default:
-      note = buildVocabClozeNote(ankiConfig, card, tags, allowDuplicate);
-  }
-
+// 送るのは語と、その語を含む1文（追加時に保存したもの）だけ。
+async function handleDefineWordbookWords(request) {
+  const words = (Array.isArray(request.words) ? request.words : [])
+    .map((item) => ({
+      word: clampText(String(item?.word || '').trim(), MAX_WORDBOOK_WORD_CHARS),
+      context: clampText(String(item?.context || ''), MAX_CONTEXT_CHARS),
+    }))
+    .filter((item) => item.word)
+    .slice(0, 30);
+  if (!words.length) return { success: false, error: '意味を付ける単語がありません。' };
+  const config = await getLlmConfig();
   try {
-    endpoint = localEndpointUrl(ankiConfig.url, 'http://127.0.0.1:8765', 'AnkiConnect').toString();
-    note.fields = await mapToModelFields(endpoint, note.modelName, cardType, note.fields);
-    // addNote は送り先のデッキが無いと失敗するため、先に用意する（既にあれば何もしない）。
-    await ankiConnect(endpoint, 'createDeck', { deck: note.deckName });
-    const noteId = await ankiConnect(endpoint, 'addNote', { note });
-    return { success: true, noteId, cardType };
+    await requirePrivacyConsent();
+    const list = words.map((item, i) => `${i + 1}. ${item.word}${item.context ? ` | Context: ${item.context}` : ''}`).join('\n');
+    const prompt = `あなたは日本人の英語学習者を教える講師です。次の英単語・熟語それぞれについて、文脈（Context）での意味に合わせて説明してください。
+${list}
+
+次のJSONだけを返してください。words は入力と同じ順番・同じ数にしてください。
+{
+  "words": [
+    {
+      "word": "入力の語そのまま",
+      "enDefinition": "やさしい英語による英英定義（1文）",
+      "ja": "文脈に合う日本語訳（短く）",
+      "example": "その語を使った新しい英語の例文（1文。元の文とは別のもの）"
+    }
+  ]
+}`;
+    const data = await askLlm(prompt, config);
+    const results = Array.isArray(data?.words) ? data.words : [];
+    return {
+      success: true,
+      words: words.map((item, i) => {
+        const hit = results.find((r) => String(r?.word || '').trim().toLowerCase() === item.word.toLowerCase()) || results[i] || {};
+        return {
+          word: item.word,
+          enDefinition: clampText(String(hit.enDefinition || ''), 500),
+          ja: clampText(String(hit.ja || ''), 200),
+          example: clampText(String(hit.example || ''), 500),
+        };
+      }),
+    };
   } catch (err) {
-    await recordDiagnostic('anki-add', 'anki', err.message);
-    const message = /cannot create note because it is a duplicate/i.test(err.message)
-      ? '同じ内容のカードが既にAnkiにあります。内容を編集するか、Anki側のカードを確認してください。'
-      : err.message;
-    return { success: false, error: message };
+    await recordDiagnostic('wordbook-define', config.provider, err.message);
+    return { success: false, error: err.message };
   }
 }

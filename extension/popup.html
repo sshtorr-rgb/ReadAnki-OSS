@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <title>ReadAnki</title>
   <style>
-    body { width: 300px; font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif; padding: 14px; margin: 0; color: #1e293b; background: #ffffff; }
+    body { width: min(300px, 100vw); box-sizing: border-box; font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif; padding: 14px; margin: 0; color: #1e293b; background: #ffffff; }
     h3 { margin: 0 0 8px 0; font-size: 15px; color: #1e3a8a; display: flex; align-items: center; gap: 6px; font-weight: 700; }
     p { font-size: 12px; color: #64748b; margin: 0 0 12px 0; line-height: 1.5; }
     .btn { width: 100%; padding: 9px; background: #2563eb; color: #fff; border: none; border-radius: 7px; font-weight: 600; cursor: pointer; font-size: 13px; display: flex; align-items: center; justify-content: center; gap: 6px; }
@@ -20,13 +20,13 @@
 </head>
 <body>
   <h3><span>📘</span> ReadAnki 拡張機能</h3>
-  <p>「このページで有効化」を押すと、そのタブでだけ英文選択時に三点リーダー(⋯)が出現し、文法解説・Anki登録・発音ができます。英文を選択して右クリック →「ReadAnki: 文法解説とAnki化」、またはショートカット Alt+Shift+R でも使えます。よく読むサイトは「常に有効にする」で登録できます。</p>
+  <p>「このページで有効化」を押すと、そのタブでだけ英文選択時に三点リーダー(⋯)が出現し、文法解説・発音ができます。パソコンでは、英文を選択して右クリック →「ReadAnki: 文法解説」でも使えます。</p>
   <p>コツ①:すぐに解析しないこと。一回は必ず考える。</p>
   <p>コツ②:わかったら、目をつぶって空で言ってみる。</p>
-  <p>コツ③:追加して満足しないで、Ankiのカードを定期的に復習する。</p>
+  <p>コツ③:★を付けた単語は、履歴画面の「未知語テスト」で定期的に復習する。</p>
   <button class="btn" id="activate-tab">✨ このページで有効化</button>
   <div id="activate-msg" class="status-msg" role="status"></div>
-  <button class="btn btn-secondary" id="always-enable">📌 このサイトを常に有効にする</button>
+  <button class="btn btn-secondary" id="open-wordbook">📚 この記事の単語帳</button>
   <button class="btn btn-secondary" id="open-settings">⚙️ 拡張機能の設定を開く</button>
   <button class="btn btn-secondary" id="open-history">🕘 解析履歴を開く</button>
   <div class="link-row">
@@ -34,7 +34,7 @@
   </div>
   <div class="status">
     <span>ページへのアクセス:</span>
-    <span style="font-weight: 600;">有効化したタブ・登録サイトのみ</span>
+    <span style="font-weight: 600;">有効化したタブのみ</span>
   </div>
   <script src="popup.js"></script>
 </body>

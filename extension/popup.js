@@ -46,18 +46,17 @@ document.getElementById('activate-tab').addEventListener('click', async (e) => {
 });
 
 
-document.getElementById('always-enable').addEventListener('click', async (e) => {
+// ポップアップを開いた時点で activeTab が付与されるため、このタブのURLだけは読める。
+document.getElementById('open-wordbook').addEventListener('click', async (e) => {
   e.preventDefault();
   const msg = document.getElementById('activate-msg');
   try {
-    // ポップアップを開いた時点で activeTab が付与されるため、このタブのURLだけは読める。
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     const url = new URL(tab?.url || '');
     if (!['http:', 'https:'].includes(url.protocol)) throw new Error('unsupported');
-    const site = url.protocol === 'http:' ? `http://${url.hostname}` : url.hostname;
-    chrome.tabs.create({ url: chrome.runtime.getURL(`options.html#add-site=${encodeURIComponent(site)}`) });
+    chrome.tabs.create({ url: chrome.runtime.getURL(`wordbook.html#page=${encodeURIComponent(url.href)}`) });
     window.close();
   } catch {
-    msg.textContent = 'このページは登録できません（通常のウェブサイトで使ってください）。';
+    msg.textContent = 'このページの単語帳は開けません（通常のウェブサイトで使ってください）。';
   }
 });

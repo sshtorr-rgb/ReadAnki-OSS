@@ -40,20 +40,7 @@ Promise.all([
         : res.llmConfig.geminiModel;
   }
   if (res.ankiConfig) {
-    document.getElementById('ankiUrl').value = res.ankiConfig.url || 'http://127.0.0.1:8765';
     document.getElementById('wordDefinitionMode').value = res.ankiConfig.wordDefinitionMode || 'llm-japanese';
-    document.getElementById('vocabClozeDeckName').value =
-      res.ankiConfig.vocabClozeDeckName || 'AnkiRead::Vocab-Cloze';
-    document.getElementById('vocabClozeModelName').value = res.ankiConfig.vocabClozeModelName || '穴埋め問題';
-    document.getElementById('grammarDeckName').value =
-      res.ankiConfig.grammarDeckName || 'AnkiRead::Grammar';
-    document.getElementById('grammarModelName').value = res.ankiConfig.grammarModelName || '基本';
-    document.getElementById('enJaDeckName').value =
-      res.ankiConfig.enJaDeckName || 'AnkiRead::EN-JP';
-    document.getElementById('enJaModelName').value = res.ankiConfig.enJaModelName || '基本';
-    document.getElementById('jaEnDeckName').value =
-      res.ankiConfig.jaEnDeckName || 'AnkiRead::JP-EN';
-    document.getElementById('jaEnModelName').value = res.ankiConfig.jaEnModelName || '基本 (文字入力解答)';
   }
   document.getElementById('privacyConsent').checked = !!res.privacyConsent;
   document.getElementById('persistApiKeys').checked = !!res.persistApiKeys;
@@ -93,7 +80,6 @@ document.getElementById('save-btn').addEventListener('click', async () => {
     }
     const res = await chrome.storage.local.get(['llmConfig', 'ankiConfig']);
     const prevLlm = res.llmConfig || {};
-    const prevAnki = res.ankiConfig || {};
     const llmConfig = {
       ...prevLlm,
       provider: document.getElementById('provider').value,
@@ -112,19 +98,8 @@ document.getElementById('save-btn').addEventListener('click', async () => {
     const persistApiKeys = document.getElementById('persistApiKeys').checked;
     if (persistApiKeys) Object.assign(llmConfig, secrets);
     else ['localOpenAiApiKey', 'openAiApiKey', 'geminiApiKey'].forEach((key) => delete llmConfig[key]);
-    const ankiConfig = {
-      ...prevAnki,
-      url: document.getElementById('ankiUrl').value,
-      wordDefinitionMode: document.getElementById('wordDefinitionMode').value,
-      vocabClozeDeckName: document.getElementById('vocabClozeDeckName').value,
-      vocabClozeModelName: document.getElementById('vocabClozeModelName').value,
-      grammarDeckName: document.getElementById('grammarDeckName').value,
-      grammarModelName: document.getElementById('grammarModelName').value,
-      enJaDeckName: document.getElementById('enJaDeckName').value,
-      enJaModelName: document.getElementById('enJaModelName').value,
-      jaEnDeckName: document.getElementById('jaEnDeckName').value,
-      jaEnModelName: document.getElementById('jaEnModelName').value,
-    };
+    // Firefox版はAnki連携を持たないため、語義の表示方法だけを保存する（以前のAnki設定は消える）。
+    const ankiConfig = { wordDefinitionMode: document.getElementById('wordDefinitionMode').value };
     await chrome.storage.local.set({ llmConfig, ankiConfig, privacyConsent: true, persistApiKeys });
     if (!persistApiKeys) await chrome.storage.local.remove(['localOpenAiApiKey', 'openAiApiKey', 'geminiApiKey']);
     await chrome.storage.session.set({ llmSecrets: secrets });
@@ -152,135 +127,3 @@ document.getElementById('copy-diagnostic').addEventListener('click', async () =>
   }
 });
 
-
-// ============================================================
-// 常に有効にするサイト（許可サイト）
-// ============================================================
-function normalizeSite(raw) {
-  const text = String(raw || '').trim();
-  if (!text) return null;
-  let url;
-  try {
-    url = new URL(/^https?:\/\//i.test(text) ? text : `https://${text}`);
-  } catch {
-    return null;
-  }
-  if (!['http:', 'https:'].includes(url.protocol)) return null;
-  const host = url.hostname.toLowerCase();
-  if (!host || host.includes('*')) return null;
-  return { host, pattern: `${url.protocol}//${host}/*` };
-}
-
-function sitePatterns(host) {
-  return [`https://${host}/*`, `http://${host}/*`];
-}
-
-async function renderSites() {
-  const list = document.getElementById('site-list');
-  const { allowedSites = [] } = await chrome.storage.local.get('allowedSites');
-  const { origins = [] } = await chrome.permissions.getAll();
-  const granted = new Set(origins);
-  const sites = (Array.isArray(allowedSites) ? allowedSites : []).filter((host) =>
-    sitePatterns(host).some((pattern) => granted.has(pattern))
-  );
-  list.replaceChildren();
-  if (!sites.length) {
-    const li = document.createElement('li');
-    li.className = 'empty';
-    li.textContent = '登録されたサイトはありません';
-    list.appendChild(li);
-    return;
-  }
-  for (const host of sites) {
-    const li = document.createElement('li');
-    const name = document.createElement('span');
-    name.textContent = host;
-    const remove = document.createElement('button');
-    remove.type = 'button';
-    remove.className = 'site-remove';
-    remove.textContent = '削除';
-    remove.addEventListener('click', () => removeSite(host));
-    li.append(name, remove);
-    list.appendChild(li);
-  }
-}
-
-async function addSite() {
-  const msg = document.getElementById('site-msg');
-  const site = normalizeSite(document.getElementById('site-input').value);
-  if (!site) {
-    msg.textContent = 'サイトのアドレスを正しく入力してください（例: www.bbc.com）。';
-    return;
-  }
-  try {
-    // ユーザー操作の直後に呼ぶ必要があるため、最初に権限を求める。
-    const granted = await chrome.permissions.request({ origins: [site.pattern] });
-    if (!granted) {
-      msg.textContent = `${site.host} へのアクセスが許可されなかったため、登録しませんでした。`;
-      return;
-    }
-    const { allowedSites = [] } = await chrome.storage.local.get('allowedSites');
-    const next = Array.from(new Set([...(Array.isArray(allowedSites) ? allowedSites : []), site.host]));
-    await chrome.storage.local.set({ allowedSites: next });
-    document.getElementById('site-input').value = '';
-    msg.textContent = `✅ ${site.host} を登録しました。開いているタブは再読み込みすると有効になります。`;
-    await renderSites();
-  } catch (error) {
-    msg.textContent = `登録に失敗しました: ${error.message}`;
-  }
-}
-
-async function removeSite(host) {
-  const msg = document.getElementById('site-msg');
-  try {
-    const { allowedSites = [] } = await chrome.storage.local.get('allowedSites');
-    await chrome.storage.local.set({
-      allowedSites: (Array.isArray(allowedSites) ? allowedSites : []).filter((item) => item !== host),
-    });
-    // OpenAI互換サーバーとして使っているホストの権限は残す。
-    const { llmConfig = {} } = await chrome.storage.local.get('llmConfig');
-    const endpointHost = llmConfig.provider === 'local-openai' ? normalizeSite(llmConfig.localOpenAiUrl)?.host : null;
-    if (endpointHost !== host) await chrome.permissions.remove({ origins: sitePatterns(host) });
-    msg.textContent = `${host} の登録を削除しました。`;
-    await renderSites();
-  } catch (error) {
-    msg.textContent = `削除に失敗しました: ${error.message}`;
-  }
-}
-
-document.getElementById('add-site-btn').addEventListener('click', addSite);
-document.getElementById('site-input').addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') addSite();
-});
-
-// ポップアップの「このサイトを常に有効にする」から開かれた場合は、入力欄に入れておく。
-const prefillSite = new URLSearchParams(location.hash.slice(1)).get('add-site');
-if (prefillSite) {
-  document.getElementById('site-input').value = prefillSite;
-  document.getElementById('site-input').scrollIntoView({ block: 'center' });
-  document.getElementById('site-msg').textContent = '「追加」を押すと、このサイトへのアクセス許可を求めます。';
-}
-renderSites();
-
-
-// 日英カード用の専用ノートタイプ（日本語／英文／解説）を Anki に作り、送り先にする。
-document.getElementById('create-ja-en-model').addEventListener('click', async () => {
-  const msg = document.getElementById('create-model-msg');
-  msg.textContent = 'Ankiに作成中…';
-  try {
-    // 設定画面から AnkiConnect（localhost / 127.0.0.1 のみ）を直接呼ぶ。
-    const rawUrl = document.getElementById('ankiUrl').value.trim() || 'http://127.0.0.1:8765';
-    let url;
-    try { url = new URL(rawUrl); } catch (e) { throw new Error(`AnkiConnect URL「${rawUrl}」が正しくありません。`); }
-    if (!LOOPBACK_HOSTS.includes(url.hostname)) throw new Error('AnkiConnect URL は localhost / 127.0.0.1 のみ指定できます。');
-    const res = await createJaEnModel(url.toString());
-    const { ankiConfig = {} } = await chrome.storage.local.get('ankiConfig');
-    await chrome.storage.local.set({ ankiConfig: { ...ankiConfig, url: rawUrl, jaEnModelName: res.modelName } });
-    document.getElementById('jaEnModelName').value = res.modelName;
-    msg.textContent = res.created
-      ? `✅ Ankiに「${res.modelName}」を作成し、日英カードの送り先にしました。`
-      : `✅ 「${res.modelName}」は作成済みでした。日英カードの送り先にしました。`;
-  } catch (error) {
-    msg.textContent = `作成に失敗しました: ${error.message}`;
-  }
-});
