@@ -59,17 +59,8 @@ ollama pull llama3.2
 1. Windows上で **Anki** を起動します。
 2. メニュー「ツール」→「アドオン」を開きます。
 3. 「アドオンを取得」をクリックし、コード **2055492159** (AnkiConnect) を入力してインストールします。
-4. アドオン一覧から `AnkiConnect` を選択し、**「設定」** をクリックします。
-5. `webCorsOriginList` には、Chrome Web Store公開後に確定する拡張IDだけを設定します。`"*"` は設定しないでください:
-   ```json
-   {
-     "apiKey": null,
-     "apiLogPath": null,
-     "ignoreOriginList": [],
-    "webCorsOriginList": ["chrome-extension://<Chrome-Web-Storeの拡張ID>"]
-   }
-   ```
-6. Ankiを再起動します。
+4. Ankiを再起動します。AnkiConnectの設定は初期値のままで使えます（初期値の `"webCorsOriginList": ["http://localhost"]` で、拡張機能からの接続が許可されます）。
+5. `webCorsOriginList` を `["*"]` にはしないでください。どのWebサイトからでもAnkiを操作できてしまいます。
 
 ### デッキとノートタイプ（初期設定）
 

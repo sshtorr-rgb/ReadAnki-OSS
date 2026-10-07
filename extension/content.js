@@ -18,12 +18,29 @@
   let lastContext = '';
   let currentSelectionCoords = null;
 
+  // ページ側のスクリプトが作った偽の操作（el.click()・dispatchEvent など）では、ReadAnkiを動かさない。
+  // ReadAnkiの画面は通常のDOMに置いているため、ページから要素を押されると、利用者のAPIキーでAIを呼んだり、
+  // 書き換えた内容をAnkiへ送ったりできてしまう。本物の操作は isTrusted が true になる。
+  const GUARDED_EVENTS = ['click', 'dblclick', 'auxclick', 'mousedown', 'mouseup', 'pointerdown', 'pointerup',
+    'keydown', 'keyup', 'keypress', 'input', 'change', 'paste', 'submit'];
+  function blockSyntheticEventsOnOurUi(e) {
+    if (e.isTrusted || isStale()) return;
+    const target = e.target;
+    if (!(target instanceof Node)) return;
+    if (isOurUi(target) || (wordbookToast && wordbookToast.contains(target))) {
+      e.stopImmediatePropagation();
+      e.preventDefault();
+    }
+  }
+
   function init() {
+    // 捕捉段階で window に付けると、ReadAnkiの各ボタンのハンドラより先に動く。
+    GUARDED_EVENTS.forEach((type) => window.addEventListener(type, blockSyntheticEventsOnOurUi, true));
     document.addEventListener('mouseup', handleMouseUp);
     document.addEventListener('keyup', handleKeyUp);
     document.addEventListener('mousedown', handleMouseDown);
     document.addEventListener('click', (e) => {
-      if (isStale()) return;
+      if (isStale() || !e.isTrusted) return;
       if (e.target.closest('[data-idx]')) return;
       hideTip();
     });
@@ -39,21 +56,21 @@
   }
 
   function handleMouseDown(e) {
-    if (isStale()) return;
+    if (isStale() || !e.isTrusted) return;
     if (isOurUi(e.target)) return;
     removeToolbar();
     removePopover();
   }
 
   function handleKeyUp(e) {
-    if (isStale()) return;
+    if (isStale() || !e.isTrusted) return;
     if (e.key === 'Shift' || (e.key && e.key.startsWith('Arrow'))) {
       checkSelection();
     }
   }
 
   function handleMouseUp(e) {
-    if (isStale()) return;
+    if (isStale() || !e.isTrusted) return;
     if (isOurUi(e.target)) return;
     setTimeout(checkSelection, 10);
   }

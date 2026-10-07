@@ -647,6 +647,7 @@
 /* ---- 語彙Cloze: 単語の自由選択 ---- */
 .readanki-card-v3 .rk-cloze-words { gap: 4px; }
 .readanki-card-v3 .rk-cloze-words .rk-cloze-word { border-color: var(--line); background: var(--paper); }
+.readanki-card-v3 .rk-cloze-words .rk-cloze-word[aria-pressed="true"] { background: var(--role-v); border-color: var(--role-v); color: #fff; }
 
 /* ---- 解説カード: 隠した項目を表示するボタン ---- */
 .readanki-card-v3 .rk-reveal-btn {

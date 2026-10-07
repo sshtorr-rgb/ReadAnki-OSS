@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "ReadAnki",
-  "version": "3.0.14",
+  "version": "3.2.1",
   "description": "英文の構文・文法をAI解説し、Anki化するリーディング学習アシスタント（UI v3）",
   "permissions": ["storage", "contextMenus", "activeTab", "scripting"],
   "host_permissions": [
