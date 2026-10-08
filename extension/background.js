@@ -307,8 +307,29 @@ async function requirePrivacyConsent() {
   if (!privacyConsent) throw new Error('初回設定でデータ処理への同意が必要です。ReadAnkiの設定を開いて同意してください。');
 }
 
+// 診断情報に秘密の値が残らないよう伏せ字にする。
+// 設定済みのキーそのもの → URLのクエリの値 → Bearer などの認証値 → key= / token= などの値 → キーやトークンらしい長い文字列、の順に消す。
+function redactSecrets(text, knownSecrets = []) {
+  let safe = String(text || '');
+  for (const secret of knownSecrets) {
+    if (typeof secret === 'string' && secret.length >= 6) safe = safe.split(secret).join('[REDACTED]');
+  }
+  return safe
+    .replace(/([?&#][^=\s&#?]+=)[^&#\s"'<>)]+/g, '$1[REDACTED]')
+    .replace(/\b(Bearer|Basic|Token)\s+[A-Za-z0-9._~+\/=-]+/gi, '$1 [REDACTED]')
+    .replace(/\b((?:x-goog-api-key|api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|token|secret|password|passwd|authorization|auth|key|sig|signature)["']?\s*[:=]\s*["']?)(?!\[REDACTED\])[^\s"'&,;}<>]+/gi, '$1[REDACTED]')
+    .replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*/g, '[REDACTED]')
+    .replace(/(?:sk-|AIza|ghp_|gho_|xox[abp]-)[A-Za-z0-9_\-]+/g, '[REDACTED]')
+    .replace(/(?<![A-Za-z0-9_\-])[A-Za-z0-9_\-]{32,}(?![A-Za-z0-9_\-])/g, '[REDACTED]');
+}
+
 async function recordDiagnostic(kind, provider, error) {
-  const safeError = String(error || '不明なエラー').replace(/(?:sk-|AIza)[A-Za-z0-9_\-]+/g, '[REDACTED]');
+  let knownSecrets = [];
+  try {
+    const config = await getLlmConfig();
+    knownSecrets = SECRET_CONFIG_KEYS.map((key) => config[key]);
+  } catch {}
+  const safeError = redactSecrets(error || '不明なエラー', knownSecrets);
   await chrome.storage.session.set({
     lastDiagnostic: { kind, provider: provider || 'unknown', error: safeError.slice(0, 300), occurredAt: Date.now() },
   });
