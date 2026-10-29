@@ -3,6 +3,7 @@ function updateVisibility() {
   document.getElementById('local-openai-section').style.display =
     p === 'local-openai' ? 'block' : 'none';
   document.getElementById('ollama-section').style.display = p === 'ollama' ? 'block' : 'none';
+  document.getElementById('opencode-section').style.display = p === 'opencode' ? 'block' : 'none';
   // 外部の読み上げ（発音）で使うAPIキーの欄は、LLMプロバイダが別でも表示する。
   const tts = document.getElementById('ttsEngine').value;
   document.getElementById('openai-section').style.display = p === 'openai' || tts === 'openai' ? 'block' : 'none';
@@ -10,6 +11,12 @@ function updateVisibility() {
 }
 
 document.getElementById('provider').addEventListener('change', updateVisibility);
+
+// 演出がオフのときは、強さ・効果音の欄を薄く表示して触れないようにする
+function updateFxOptions() {
+  document.getElementById('fx-options').classList.toggle('is-off', !document.getElementById('fx-enabled').checked);
+}
+document.getElementById('fx-enabled').addEventListener('change', updateFxOptions);
 
 // ============================================================
 // タブ切り替え（最後に開いたタブはこのブラウザにだけ覚える）
@@ -61,12 +68,15 @@ Promise.all([
     document.getElementById('openAiApiKey').value = secrets.openAiApiKey || res.llmConfig.openAiApiKey || '';
     document.getElementById('openAiModel').value = res.llmConfig.openAiModel || 'gpt-4o-mini';
     document.getElementById('geminiApiKey').value = secrets.geminiApiKey || res.llmConfig.geminiApiKey || '';
+    document.getElementById('opencodeApiKey').value = secrets.opencodeApiKey || res.llmConfig.opencodeApiKey || '';
+    document.getElementById('opencodeModel').value = res.llmConfig.opencodeModel || 'kimi-k2.6';
     const deprecatedGeminiModels = ['gemini-2.0-flash', 'gemini-2.5-flash', 'gemini-2.5-pro'];
     document.getElementById('geminiModel').value =
       !res.llmConfig.geminiModel || deprecatedGeminiModels.includes(res.llmConfig.geminiModel)
         ? 'gemini-3.1-flash-lite'
         : res.llmConfig.geminiModel;
   }
+  document.getElementById('articleDecks').checked = res.ankiConfig?.articleDecks !== false;
   if (res.ankiConfig) {
     document.getElementById('ankiUrl').value = res.ankiConfig.url || 'http://127.0.0.1:8765';
     document.getElementById('wordDefinitionMode').value = res.ankiConfig.wordDefinitionMode || 'llm-japanese';
@@ -86,10 +96,18 @@ Promise.all([
   const display = res.displayConfig || {};
   document.getElementById('display-grammar').value = display.grammar || 'show';
   document.getElementById('display-vocabulary').value = display.vocabulary || 'show';
+  // 演出: displayConfig.fx は 'full' / 'subtle' / 'off'。オン・オフと強さに分けて表示する。
+  const fx = ['full', 'subtle', 'off'].includes(display.fx) ? display.fx : 'full';
+  document.getElementById('fx-enabled').checked = fx !== 'off';
+  document.getElementById('fx-strength').value = fx === 'subtle' ? 'subtle' : (display.fxStrength === 'subtle' ? 'subtle' : 'full');
+  updateFxOptions();
+  document.getElementById('display-fxSound').checked = display.fxSound === true;
   const cardJa = { ...CARD_JA_DEFAULTS, ...(res.ankiConfig?.cardJa || {}) };
   Object.keys(CARD_JA_DEFAULTS).forEach((key) => {
     document.getElementById(`cardJa-${key}`).checked = cardJa[key] !== false;
   });
+  const clozeHintMode = res.ankiConfig?.clozeHintMode === 'sentence' ? 'sentence' : 'part';
+  document.querySelector(`input[name="clozeHintMode"][value="${clozeHintMode}"]`).checked = true;
   document.getElementById('privacyConsent').checked = !!res.privacyConsent;
   // 同意前は「プライバシー」タブから始める（同意しないと保存できないため）
   if (!res.privacyConsent && !prefillSite) showTab('privacy', false);
@@ -119,8 +137,11 @@ document.getElementById('save-btn').addEventListener('click', async () => {
   try {
     // 外部のOpenAI互換サーバーを使う場合だけ、そのホストへのアクセスを個別に許可してもらう。
     // ユーザー操作の直後に呼ぶ必要があるため、他の await より先に実行する。
-    if (document.getElementById('provider').value === 'local-openai') {
-      const origin = remoteHttpsOrigin(document.getElementById('localOpenAiUrl').value);
+    const selectedProvider = document.getElementById('provider').value;
+    if (selectedProvider === 'local-openai' || selectedProvider === 'opencode') {
+      const origin = selectedProvider === 'opencode'
+        ? 'https://opencode.ai'
+        : remoteHttpsOrigin(document.getElementById('localOpenAiUrl').value);
       if (origin) {
         const granted = await chrome.permissions.request({ origins: [`${origin}/*`] });
         if (!granted) {
@@ -141,15 +162,17 @@ document.getElementById('save-btn').addEventListener('click', async () => {
       ollamaModel: document.getElementById('ollamaModel').value,
       openAiModel: document.getElementById('openAiModel').value,
       geminiModel: document.getElementById('geminiModel').value,
+      opencodeModel: document.getElementById('opencodeModel').value,
     };
     const secrets = {
       localOpenAiApiKey: document.getElementById('localOpenAiApiKey').value,
       openAiApiKey: document.getElementById('openAiApiKey').value,
       geminiApiKey: document.getElementById('geminiApiKey').value,
+      opencodeApiKey: document.getElementById('opencodeApiKey').value,
     };
     const persistApiKeys = document.getElementById('persistApiKeys').checked;
     if (persistApiKeys) Object.assign(llmConfig, secrets);
-    else ['localOpenAiApiKey', 'openAiApiKey', 'geminiApiKey'].forEach((key) => delete llmConfig[key]);
+    else ['localOpenAiApiKey', 'openAiApiKey', 'geminiApiKey', 'opencodeApiKey'].forEach((key) => delete llmConfig[key]);
     const ankiConfig = {
       ...prevAnki,
       url: document.getElementById('ankiUrl').value,
@@ -162,14 +185,19 @@ document.getElementById('save-btn').addEventListener('click', async () => {
       enJaModelName: document.getElementById('enJaModelName').value,
       jaEnDeckName: document.getElementById('jaEnDeckName').value,
       jaEnModelName: document.getElementById('jaEnModelName').value,
+      articleDecks: document.getElementById('articleDecks').checked,
+      clozeHintMode: document.querySelector('input[name="clozeHintMode"]:checked')?.value === 'sentence' ? 'sentence' : 'part',
       cardJa: Object.fromEntries(Object.keys(CARD_JA_DEFAULTS).map((key) => [key, document.getElementById(`cardJa-${key}`).checked])),
     };
     const displayConfig = {
       grammar: document.getElementById('display-grammar').value,
       vocabulary: document.getElementById('display-vocabulary').value,
+      fx: document.getElementById('fx-enabled').checked ? document.getElementById('fx-strength').value : 'off',
+      fxStrength: document.getElementById('fx-strength').value,
+      fxSound: document.getElementById('display-fxSound').checked,
     };
     await chrome.storage.local.set({ llmConfig, ankiConfig, displayConfig, privacyConsent: true, persistApiKeys });
-    if (!persistApiKeys) await chrome.storage.local.remove(['localOpenAiApiKey', 'openAiApiKey', 'geminiApiKey']);
+    if (!persistApiKeys) await chrome.storage.local.remove(['localOpenAiApiKey', 'openAiApiKey', 'geminiApiKey', 'opencodeApiKey']);
     await chrome.storage.session.set({ llmSecrets: secrets });
     const msg = document.getElementById('save-msg');
     msg.textContent = '✅ 設定を保存しました！';

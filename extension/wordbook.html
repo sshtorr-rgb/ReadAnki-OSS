@@ -25,6 +25,15 @@
         <option value="example">AIの例文で出題（意味付け済みの語）</option>
       </select>
       <span class="wb-test-note" id="wb-quiz-note"></span>
+      <span class="wb-compose-group">
+        <button class="button" id="wb-compose-open" type="button" title="単語帳の語をいくつかずつ1文に詰め込んだ和文英訳の問題をAIが作ります">✍️ 作文テスト</button>
+        <select id="wb-compose-per" aria-label="1文に入れる語の数">
+          <option value="3">1文に3語</option>
+          <option value="4">1文に4語</option>
+          <option value="5" selected>1文に5語</option>
+          <option value="6">1文に6語</option>
+        </select>
+      </span>
     </section>
 
     <section class="wb-actions" id="wb-actions" hidden>
@@ -33,6 +42,16 @@
       <button class="button" id="wb-anki" type="button" title="単語を記事の文の中で穴埋めにし、和訳をヒントにした語彙Clozeカードを送ります">📥 Ankiに送る</button>
       <label class="wb-hide"><input type="checkbox" id="wb-hide-meaning"> 意味を隠す（押すと表示）</label>
       <button class="button button-danger" id="wb-delete-book" type="button">この単語帳を削除</button>
+    </section>
+    <section class="wb-actions wb-backup" id="wb-backup" hidden>
+      <span class="wb-backup-label">バックアップ</span>
+      <button class="button" id="wb-export" type="button" title="単語帳・解析履歴・テストの記録を1つのファイル（JSON）に書き出します。APIキーや設定は含みません">📤 書き出す</button>
+      <button class="button" id="wb-import" type="button" title="書き出したファイルを読み込みます">📥 読み込む</button>
+      <select id="wb-import-mode" aria-label="読み込み方">
+        <option value="merge">今のデータに追加</option>
+        <option value="replace">今のデータを置き換える</option>
+      </select>
+      <input type="file" id="wb-import-file" accept=".json,application/json" hidden>
     </section>
     <p class="wb-msg" id="wb-msg" role="status"></p>
 
@@ -49,6 +68,7 @@
     </div>
   </main>
   <script src="tts.js"></script>
+  <script src="fx.js"></script>
   <script src="wordbook.js"></script>
 </body>
 </html>

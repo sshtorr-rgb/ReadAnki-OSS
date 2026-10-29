@@ -10,7 +10,13 @@
     .form-group { margin-bottom: 16px; }
     label { display: block; font-weight: 600; font-size: 13px; margin-bottom: 5px; color: #334155; }
     input, select { width: 100%; padding: 9px 12px; border: 1px solid #cbd5e1; border-radius: 7px; box-sizing: border-box; font-size: 13px; font-family: inherit; }
-    input[type="checkbox"] { width: auto; padding: 0; margin: 0 6px 0 0; vertical-align: middle; }
+    .fx-switch { display: flex; align-items: center; gap: 10px; font-weight: 700; cursor: pointer; }
+    .fx-switch input[type="checkbox"] { flex: none; appearance: none; position: relative; width: 42px; height: 24px; margin: 0; border-radius: 999px; background: #cbd5e1; cursor: pointer; transition: background .2s; }
+    .fx-switch input[type="checkbox"]::after { content: ''; position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.25); transition: transform .2s; }
+    .fx-switch input[type="checkbox"]:checked { background: #2563eb; }
+    .fx-switch input[type="checkbox"]:checked::after { transform: translateX(18px); }
+    #fx-options.is-off { opacity: .45; pointer-events: none; }
+    input[type="checkbox"], input[type="radio"] { width: auto; padding: 0; margin: 0 6px 0 0; vertical-align: middle; }
     input:focus, select:focus { outline: none; border-color: #2563eb; box-shadow: 0 0 0 3px rgba(37,99,235,0.15); }
     .help { font-size: 11.5px; color: #64748b; margin-top: 4px; }
     .btn { padding: 10px 24px; background: #2563eb; color: #fff; border: none; border-radius: 7px; font-weight: 600; cursor: pointer; font-size: 14px; }
@@ -45,6 +51,7 @@
       <button type="button" role="tab" data-tab="display">🪄 解説の表示</button>
       <button type="button" role="tab" data-tab="anki">📥 Anki</button>
       <button type="button" role="tab" data-tab="tts">🔊 発音</button>
+      <button type="button" role="tab" data-tab="fx">✨ 演出</button>
       <button type="button" role="tab" data-tab="sites">📌 サイト</button>
       <button type="button" role="tab" data-tab="privacy">🔒 プライバシー</button>
     </nav>
@@ -59,6 +66,7 @@
           <option value="local-openai">OpenAI互換 (ローカルLLM / LM Studio / vLLM / LocalAI)</option>
           <option value="ollama">Ollama (Native API / ローカル)</option>
           <option value="openai">OpenAI (GPT-4o-mini / クラウド)</option>
+          <option value="opencode">OpenCode Zen (Kimi / GLM / Qwen など / クラウド)</option>
         </select>
         <div class="help">スクリーンショット解析には、選択したプロバイダで画像入力に対応したモデルが必要です。</div>
       </div>
@@ -93,6 +101,23 @@
         <input type="password" id="openAiApiKey" placeholder="sk-...">
         <label style="margin-top: 10px;">OpenAI モデル名</label>
         <input type="text" id="openAiModel" value="gpt-4o-mini">
+      </div>
+
+      <div class="form-group" id="opencode-section">
+        <label>OpenCode Zen APIキー (BYOK)</label>
+        <input type="password" id="opencodeApiKey" placeholder="OpenCode Zenで発行したAPIキー">
+        <div class="help">APIキーはOpenCode Zen（<code>opencode.ai</code>）へ直接送信され、ReadAnkiのプロキシは使用しません。初めて保存するときに、<code>opencode.ai</code> へのアクセス許可を求めます。</div>
+        <div class="help">まずはOpenCodeにログインし、APIキーを発行して、この上にコピーしましょう（利用には残高のチャージが必要です。期間限定の無料モデルもあります）。</div>
+        <label style="margin-top: 10px;">OpenCode Zen モデル名</label>
+        <input type="text" id="opencodeModel" value="kimi-k2.6" list="opencode-models">
+        <datalist id="opencode-models">
+          <option value="kimi-k2.6"></option>
+          <option value="glm-5.1"></option>
+          <option value="qwen3.6-plus"></option>
+          <option value="minimax-m2.7"></option>
+          <option value="big-pickle"></option>
+        </datalist>
+        <div class="help">既定: kimi-k2.6。ReadAnkiは <code>/zen/v1/chat/completions</code> を使うため、Kimi・GLM・Qwen・MiniMax・Big Pickle などChat Completions対応のモデルを指定してください（GPT・Claude・Geminiのモデルは使えません）。 <a href="https://opencode.ai/docs/zen/" target="_blank" rel="noopener noreferrer">OpenCode Zenのモデル一覧</a> <a href="https://opencode.ai/auth" target="_blank" rel="noopener noreferrer">OpenCode APIキーのURL</a></div>
       </div>
 
       <div class="form-group" id="gemini-section">
@@ -154,7 +179,11 @@
       <div class="form-group">
         <div class="help" style="margin: 0 0 8px;">Ankiカードに入れる日本語を選びます。外した項目はどのカード形式にも入りません（英日カードの「和訳」と日英カードの表面の日本語は、問題・答えなので常に入ります）。</div>
         <div class="check-list">
-        <label style="font-weight: 400;"><input type="checkbox" id="cardJa-clozeHint"> 語彙Clozeの和訳ヒント（表面・穴の部分の訳）</label>
+        <label style="font-weight: 400;"><input type="checkbox" id="cardJa-clozeHint"> 語彙Clozeの和訳ヒント（表面）</label>
+        <div style="margin: 0 0 4px 24px;">
+          <label style="font-weight: 400;"><input type="radio" name="clozeHintMode" value="part"> 選択のみ日本語（穴の部分の訳）</label>
+          <label style="font-weight: 400;"><input type="radio" name="clozeHintMode" value="sentence"> 全文日本語（文全体の訳）</label>
+        </div>
         <label style="font-weight: 400;"><input type="checkbox" id="cardJa-grammar"> 文法の解説（「文法ポイント」「文法」）</label>
         <label style="font-weight: 400;"><input type="checkbox" id="cardJa-translation"> 文全体の和訳（語彙Cloze・Grammarの裏面の「訳」）</label>
         <label style="font-weight: 400;"><input type="checkbox" id="cardJa-meaning"> 選択部分の意味（語彙Clozeの裏面の「意味」）</label>
@@ -168,6 +197,9 @@
       <div class="form-group">
         <label>AnkiConnect URL</label>
         <input type="text" id="ankiUrl" value="http://127.0.0.1:8765">
+
+        <label style="margin-top: 14px; font-weight: 400;"><input type="checkbox" id="articleDecks"> 記事ごとにデッキを分ける</label>
+        <div class="help">オンにすると、記事ごとに「AnkiRead::2026-10-14 記事の題名::Vocab-Cloze」のようなデッキを作ります（日付はその記事で最初にカードを作った日）。下のデッキ名の最後の「::」の前に、記事のデッキが入ります。</div>
 
         <label style="margin-top: 14px;">Vocabulary Cloze（語彙穴埋め）デッキ名</label>
         <input type="text" id="vocabClozeDeckName" value="AnkiRead::Vocab-Cloze">
@@ -281,6 +313,26 @@
           <span id="tts-msg" class="help" role="status"></span>
         </div>
         <div class="help">試聴は、この画面で選んでいる設定（未保存でも可）で読み上げます。APIキーは保存済みのものを使います。</div>
+      </div>
+    </section>
+
+    <section class="panel" data-panel="fx" id="panel-fx" hidden>
+      <h3 class="panel-title">演出</h3>
+      <p class="panel-desc">単語テスト・作文テストのご褒美演出（紙吹雪・コンボ・ハンコ・レベルアップ・結果画面）を設定します。</p>
+      <div class="form-group">
+        <label class="fx-switch"><input type="checkbox" id="fx-enabled" role="switch"> <span>演出をオンにする</span></label>
+        <div class="help">オフにすると、テストは今までどおり静かに進みます（経験値・レベルなどの記録は続けます）。</div>
+        <div id="fx-options">
+          <div class="setting-row" style="margin-top: 12px;">
+            <span>強さ</span>
+            <select id="fx-strength">
+              <option value="full">全開（紙吹雪・揺れあり）</option>
+              <option value="subtle">控えめ（数字とバーだけ動く）</option>
+            </select>
+          </div>
+          <label style="font-weight: 400; margin-top: 8px;"><input type="checkbox" id="display-fxSound"> 効果音を鳴らす</label>
+        </div>
+        <div class="help">動きはばね・重力・空気抵抗の物理計算で描きます。OSで「視差効果を減らす（動きを減らす）」を設定している場合は、動きを止めて表示だけにします。経験値・レベル・連続日数・最高記録は端末内にだけ保存します。</div>
       </div>
     </section>
 

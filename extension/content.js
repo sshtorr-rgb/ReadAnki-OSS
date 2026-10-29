@@ -933,7 +933,9 @@
     const clozeWords = String(phrase || '').split(/\s+/).filter(Boolean).map((text) => ({ text }));
     const selectedWords = new Set();
     const defaultHint = String(data.targetTranslation || data.sentenceTranslation || '').trim();
-    const hintCache = new Map();
+    const sentenceHint = String(data.sentenceTranslation || data.targetTranslation || '').trim();
+    // 和訳ヒントの範囲（設定）: 'part' = 選択のみ日本語（穴の部分の訳）、'sentence' = 全文日本語
+    let hintMode = 'part';    const hintCache = new Map();
     let hintEdited = false;
     let lastClickedWord = -1;
     let clozeRequest = 0;
@@ -992,6 +994,11 @@
     function updateHint() {
       clearTimeout(hintTimer);
       if (hintEdited) return sendClozeFields();
+      if (hintMode === 'sentence') {
+        clozeHintEl.value = sentenceHint;
+        clozeHintStatusEl.textContent = '';
+        return sendClozeFields();
+      }
       const groups = clozeGroups();
       if (!groups.length) {
         clozeHintEl.value = defaultHint;
@@ -1072,9 +1079,13 @@
         hintEdited = false;
         updateHint();
       };
-      // 設定で「語彙Clozeの和訳ヒント」を外している場合は欄を隠す
+      // 設定で「語彙Clozeの和訳ヒント」を外している場合は欄を隠す。「全文日本語」なら文全体の訳にする
       chrome.storage.local.get(['ankiConfig'], (res) => {
         if (res.ankiConfig?.cardJa?.clozeHint === false) { const row = popover?.querySelector('#rk-cloze-hint-row'); if (row) row.style.display = 'none'; }
+        if (res.ankiConfig?.clozeHintMode === 'sentence') {
+          hintMode = 'sentence';
+          if (!hintEdited) updateHint();
+        }
       });
       syncClozeUi();
     }
@@ -1166,7 +1177,7 @@
       chrome.runtime.sendMessage(
         {
           action: 'addToAnki',
-          card: { targetPhrase: phrase, contextSentence: context, explanation: data, cardType, fields },
+          card: { targetPhrase: phrase, contextSentence: context, explanation: data, cardType, fields, articleTitle: document.title },
         },
         (ankiRes) => {
           if (!btn.isConnected) return;

@@ -17,6 +17,7 @@ chrome.runtime.onInstalled.addListener((details) => {
           localOpenAiApiKey: '',
           geminiModel: 'gemini-3.1-flash-lite',
           openAiModel: 'gpt-4o-mini',
+          opencodeModel: OPENCODE_DEFAULT_MODEL,
         },
         ankiConfig: {
           url: 'http://127.0.0.1:8765',
@@ -159,6 +160,10 @@ function overPageCallLimit(sender) {
 
 chrome.tabs.onRemoved.addListener((tabId) => pageCallLog.delete(tabId));
 
+function isExtensionPageSender(sender) {
+  return sender?.id === chrome.runtime.id && String(sender?.url || '').startsWith(chrome.runtime.getURL(''));
+}
+
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === 'explain') {
     if (overPageCallLimit(sender)) { sendResponse(PAGE_CALL_LIMIT_ERROR); return false; }
@@ -180,7 +185,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 
   if (request.action === 'addToAnki') {
-    handleAddToAnki(request).then(sendResponse);
+    // 記事ごとのデッキ名に使うため、記事のURLは送信元のフレームから取る。
+    // 単語帳画面（拡張機能のページ）からは、その単語帳の記事のURLを使う。
+    const articleUrl = isExtensionPageSender(sender)
+      ? (typeof request.articlePage === 'string' ? request.articlePage : '')
+      : (sender.tab ? sender.url : '');
+    handleAddToAnki(request, articleUrl).then(sendResponse);
     return true;
   }
 
@@ -210,6 +220,22 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
   if (request.action === 'defineWordbookWords') {
     handleDefineWordbookWords(request).then(sendResponse);
+    return true;
+  }
+
+  if (request.action === 'exportUserData' || request.action === 'importUserData') {
+    // バックアップの書き出し・読み込みは、拡張機能のページ（単語帳画面）からだけ受け付ける。
+    if (!isExtensionPageSender(sender)) return false;
+    (request.action === 'exportUserData' ? exportUserData() : importUserData(request.data, request.mode))
+      .then(sendResponse)
+      .catch((error) => sendResponse({ success: false, error: error.message }));
+    return true;
+  }
+
+  if (request.action === 'composeWordbookQuiz') {
+    // 単語帳画面（拡張機能のページ）の「作文テスト」からのみ受け付ける。
+    if (!isExtensionPageSender(sender)) return false;
+    handleComposeWordbookQuiz(request).then(sendResponse);
     return true;
   }
 
@@ -257,7 +283,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === 'synthesizeSpeech') {
     // 未保存の設定での試聴は、拡張機能のページ（設定画面）からだけ受け付ける。
     // （設定画面はタブで開くため sender.tab の有無ではなく、送信元URLが拡張機能自身のページかで判定する）
-    const fromExtensionPage = sender.id === chrome.runtime.id && String(sender.url || '').startsWith(chrome.runtime.getURL(''));
+    const fromExtensionPage = isExtensionPageSender(sender);
     if (!fromExtensionPage && overPageCallLimit(sender)) { sendResponse(PAGE_CALL_LIMIT_ERROR); return false; }
     handleSynthesizeSpeech(request, fromExtensionPage ? request.config : null).then(sendResponse);
     return true;
@@ -272,7 +298,10 @@ function clampText(value, max) {
   return String(value || '').replace(/\s+/g, ' ').trim().slice(0, max);
 }
 
-const SECRET_CONFIG_KEYS = ['localOpenAiApiKey', 'openAiApiKey', 'geminiApiKey'];
+const SECRET_CONFIG_KEYS = ['localOpenAiApiKey', 'openAiApiKey', 'geminiApiKey', 'opencodeApiKey'];
+// OpenCode Zen（OpenAI互換の Chat Completions。Kimi / GLM / Qwen / MiniMax など）
+const OPENCODE_CHAT_URL = 'https://opencode.ai/zen/v1/chat/completions';
+const OPENCODE_DEFAULT_MODEL = 'kimi-k2.6';
 
 async function getLlmConfig() {
   const [{ llmConfig = {} }, { llmSecrets = {} }] = await Promise.all([
@@ -589,7 +618,7 @@ Return ONLY valid JSON. Do not enclose in markdown blocks.`;
 }
 
 // ============================================================
-// LLM呼び出しの共通化（ollama / local-openai / openai / gemini）
+// LLM呼び出しの共通化（ollama / local-openai / openai / opencode / gemini）
 // ============================================================
 async function askLlm(prompt, config) {
   const provider = config.provider || 'gemini';
@@ -634,6 +663,30 @@ async function askLlm(prompt, config) {
     if (!res.ok) {
       const errText = await res.text().catch(() => '');
       throw new Error(`ローカルOpenAI互換サーバーエラー (HTTP ${res.status}): ${errText || res.statusText}`);
+    }
+    const json = await res.json();
+    return parseJsonContent(json.choices?.[0]?.message?.content || '{}');
+  }
+
+  if (provider === 'opencode') {
+    const apiKey = String(config.opencodeApiKey || '').trim();
+    if (!apiKey) throw new Error('OpenCode Zen APIキーが設定されていません。設定画面でOpenCodeのAPIキーを入力してください。');
+    const model = String(config.opencodeModel || '').trim() || OPENCODE_DEFAULT_MODEL;
+    const res = await fetch(OPENCODE_CHAT_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify({
+        model,
+        messages: [
+          { role: 'system', content: 'You are a JSON-only assistant. Always answer with strict JSON.' },
+          { role: 'user', content: prompt },
+        ],
+        temperature: 0.2,
+      }),
+    });
+    if (!res.ok) {
+      const errText = await res.text().catch(() => '');
+      throw new Error(`OpenCode Zenエラー (${model}, HTTP ${res.status}): ${errText || res.statusText}`);
     }
     const json = await res.json();
     return parseJsonContent(json.choices?.[0]?.message?.content || '{}');
@@ -739,13 +792,18 @@ async function askLlmWithImage(prompt, image, config) {
     return parseJsonContent(data.response);
   }
 
-  if (provider === 'local-openai' || provider === 'openai') {
+  if (provider === 'local-openai' || provider === 'openai' || provider === 'opencode') {
     const isOpenAi = provider === 'openai';
-    const apiKey = isOpenAi ? config.openAiApiKey : config.localOpenAiApiKey;
+    const isOpencode = provider === 'opencode';
+    const apiKey = isOpenAi ? config.openAiApiKey : isOpencode ? String(config.opencodeApiKey || '').trim() : config.localOpenAiApiKey;
     if (isOpenAi && !apiKey) throw new Error('OpenAI APIキーが設定されていません');
+    if (isOpencode && !apiKey) throw new Error('OpenCode Zen APIキーが設定されていません。設定画面でOpenCodeのAPIキーを入力してください。');
     let url;
     let model;
-    if (isOpenAi) {
+    if (isOpencode) {
+      url = OPENCODE_CHAT_URL;
+      model = String(config.opencodeModel || '').trim() || OPENCODE_DEFAULT_MODEL;
+    } else if (isOpenAi) {
       url = 'https://api.openai.com/v1/chat/completions';
       model = config.openAiModel || 'gpt-4o-mini';
     } else {
@@ -769,7 +827,7 @@ async function askLlmWithImage(prompt, image, config) {
     const res = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body) });
     if (!res.ok) {
       const errText = await res.text().catch(() => '');
-      throw new Error(`${isOpenAi ? 'OpenAI' : 'OpenAI互換サーバー'}画像解析エラー (${model}, HTTP ${res.status}): ${errText || res.statusText}`);
+      throw new Error(`${isOpenAi ? 'OpenAI' : isOpencode ? 'OpenCode Zen' : 'OpenAI互換サーバー'}画像解析エラー (${model}, HTTP ${res.status}): ${errText || res.statusText}`);
     }
     const json = await res.json();
     return parseJsonContent(json.choices?.[0]?.message?.content || '{}');
@@ -1255,6 +1313,270 @@ ${list}
   }
 }
 
+// ---------- バックアップ（書き出し・読み込み） ----------
+// 単語帳（復習の予定を含む）・解析履歴・テストの学習記録を1つのJSONにする。APIキーや設定は含めない。
+// 読み込むファイルは利用者が選んだものでも中身は信用せず、項目ごとに型と長さを確かめてから保存する。
+const BACKUP_FORMAT = 'readanki-backup';
+const BACKUP_VERSION = 1;
+
+async function exportUserData() {
+  const { wordbookIndex = [], historyIndex = [], fxProgress = null } = await chrome.storage.local.get(['wordbookIndex', 'historyIndex', 'fxProgress']);
+  const bookKeys = (Array.isArray(wordbookIndex) ? wordbookIndex : []).map((page) => `wordbook:${page}`);
+  const historyKeys = (Array.isArray(historyIndex) ? historyIndex : []).map((id) => `history:${id}`);
+  const values = await chrome.storage.local.get([...bookKeys, ...historyKeys]);
+  return {
+    success: true,
+    data: {
+      format: BACKUP_FORMAT,
+      version: BACKUP_VERSION,
+      exportedAt: new Date().toISOString(),
+      appVersion: chrome.runtime.getManifest().version,
+      wordbooks: bookKeys.map((key) => values[key]).filter(Boolean),
+      history: historyKeys.map((key) => values[key]).filter(Boolean),
+      fxProgress,
+    },
+  };
+}
+
+const backupText = (value, max) => clampText(typeof value === 'string' ? value : '', max);
+const backupTime = (value) => (Number.isFinite(Number(value)) && Number(value) > 0 ? Math.min(Number(value), 8.64e15) : 0);
+
+function cleanBackupWord(raw) {
+  const word = backupText(raw?.word, MAX_WORDBOOK_WORD_CHARS);
+  if (!word) return null;
+  const item = { word, context: backupText(raw.context, MAX_CONTEXT_CHARS), addedAt: backupTime(raw.addedAt) || Date.now() };
+  [['ja', 200], ['enDefinition', 500], ['example', 500]].forEach(([key, max]) => {
+    const value = backupText(raw[key], max);
+    if (value) item[key] = value;
+  });
+  if (backupTime(raw.reviewAt)) item.reviewAt = backupTime(raw.reviewAt);
+  if (raw.ankiAdded === true) item.ankiAdded = true;
+  return item;
+}
+
+function cleanBackupBook(raw) {
+  let page;
+  if (raw?.page === LEGACY_UNKNOWN_BOOK) page = LEGACY_UNKNOWN_BOOK;
+  else {
+    try { page = wordbookPageKey(String(raw?.page || '')); } catch { return null; }
+  }
+  const seen = new Set();
+  const words = (Array.isArray(raw.words) ? raw.words : []).map(cleanBackupWord).filter((w) => {
+    if (!w || seen.has(w.word.toLowerCase())) return false;
+    seen.add(w.word.toLowerCase());
+    return true;
+  }).slice(0, WORDBOOK_WORD_LIMIT);
+  if (!words.length) return null;
+  return {
+    page,
+    title: backupText(raw.title, 300) || page,
+    createdAt: backupTime(raw.createdAt) || Date.now(),
+    updatedAt: backupTime(raw.updatedAt) || Date.now(),
+    words,
+  };
+}
+
+function cleanBackupHistory(raw) {
+  const targetPhrase = backupText(raw?.targetPhrase, MAX_TARGET_CHARS);
+  if (!targetPhrase || !raw.explanation || typeof raw.explanation !== 'object' || Array.isArray(raw.explanation)) return null;
+  let explanation;
+  try {
+    const serialized = JSON.stringify(raw.explanation);
+    if (new TextEncoder().encode(serialized).length > MAX_EXPLANATION_BYTES) return null;
+    explanation = JSON.parse(serialized);
+  } catch {
+    return null;
+  }
+  const id = /^[0-9a-f-]{8,64}$/i.test(String(raw.id || '')) ? String(raw.id) : crypto.randomUUID();
+  return {
+    id,
+    createdAt: backupTime(raw.createdAt) || Date.now(),
+    targetPhrase,
+    contextSentence: backupText(raw.contextSentence, MAX_CONTEXT_CHARS) || targetPhrase,
+    provider: backupText(raw.provider, 40) || 'unknown',
+    explanation,
+  };
+}
+
+function cleanBackupProgress(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const num = (v, max) => Math.max(0, Math.min(max, Math.floor(Number(v) || 0)));
+  const best = {};
+  if (raw.best && typeof raw.best === 'object') ['word', 'compose'].forEach((k) => { if (raw.best[k]) best[k] = num(raw.best[k], 1e7); });
+  const day = (v) => (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : '');
+  return {
+    xp: num(raw.xp, 1e7), level: Math.max(1, num(raw.level, 10000)), streak: num(raw.streak, 100000),
+    lastDay: day(raw.lastDay), todayDate: day(raw.todayDate), todayCount: num(raw.todayCount, 100000), best,
+  };
+}
+
+// mode: 'merge'（今のデータに足す。同じ語・同じ履歴は今のものを残す）/ 'replace'（今のデータを消して置き換える）
+async function importUserData(data, mode) {
+  if (!data || typeof data !== 'object' || data.format !== BACKUP_FORMAT) {
+    throw new Error('ReadAnkiのバックアップファイルではありません。');
+  }
+  if (Number(data.version) > BACKUP_VERSION) throw new Error('新しいバージョンのReadAnkiで作られたファイルです。拡張機能を更新してから読み込んでください。');
+  const replace = mode === 'replace';
+  const books = (Array.isArray(data.wordbooks) ? data.wordbooks : []).map(cleanBackupBook).filter(Boolean);
+  const entries = (Array.isArray(data.history) ? data.history : []).map(cleanBackupHistory).filter(Boolean);
+  const progress = cleanBackupProgress(data.fxProgress);
+
+  const run = async () => {
+    const current = await chrome.storage.local.get(['wordbookIndex', 'historyIndex', 'fxProgress']);
+    const oldIndex = Array.isArray(current.wordbookIndex) ? current.wordbookIndex : [];
+    const oldHistory = Array.isArray(current.historyIndex) ? current.historyIndex : [];
+    const oldValues = await chrome.storage.local.get([...oldIndex.map((p) => `wordbook:${p}`), ...oldHistory.map((id) => `history:${id}`)]);
+    const writes = {};
+    const removes = [];
+    let addedBooks = 0;
+    let addedWords = 0;
+    let skippedBooks = 0;
+
+    // 単語帳
+    const bookMap = new Map();
+    if (!replace) oldIndex.forEach((page) => { const b = oldValues[`wordbook:${page}`]; if (b) bookMap.set(page, b); });
+    else removes.push(...oldIndex.map((p) => `wordbook:${p}`));
+    for (const book of books) {
+      const existing = bookMap.get(book.page);
+      if (existing) {
+        const have = new Set(existing.words.map((w) => w.word.toLowerCase()));
+        const extra = book.words.filter((w) => !have.has(w.word.toLowerCase())).slice(0, Math.max(0, WORDBOOK_WORD_LIMIT - existing.words.length));
+        if (extra.length) {
+          bookMap.set(book.page, { ...existing, words: [...existing.words, ...extra], updatedAt: Date.now() });
+          addedWords += extra.length;
+        }
+      } else if (bookMap.size < WORDBOOK_PAGE_LIMIT) {
+        bookMap.set(book.page, book);
+        addedBooks += 1;
+        addedWords += book.words.length;
+      } else {
+        skippedBooks += 1;
+      }
+    }
+    const bookList = [...bookMap.values()].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+    bookList.forEach((b) => { writes[`wordbook:${b.page}`] = b; });
+    writes.wordbookIndex = bookList.map((b) => b.page);
+
+    // 解析履歴（新しい順に最大 HISTORY_LIMIT 件）
+    const historyMap = new Map();
+    if (!replace) oldHistory.forEach((id) => { const e = oldValues[`history:${id}`]; if (e) historyMap.set(id, e); });
+    else removes.push(...oldHistory.map((id) => `history:${id}`));
+    let addedHistory = 0;
+    entries.forEach((entry) => { if (!historyMap.has(entry.id)) { historyMap.set(entry.id, entry); addedHistory += 1; } });
+    const historyList = [...historyMap.values()].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)).slice(0, HISTORY_LIMIT);
+    historyList.forEach((e) => { writes[`history:${e.id}`] = e; });
+    writes.historyIndex = historyList.map((e) => e.id);
+    oldHistory.filter((id) => !historyMap.has(id) || !writes[`history:${id}`]).forEach((id) => removes.push(`history:${id}`));
+
+    // 学習記録（足し合わせず、レベル・経験値の高いほうを残す。最高記録は項目ごとに高いほう）
+    if (progress) {
+      const now = cleanBackupProgress(current.fxProgress);
+      if (replace || !now) writes.fxProgress = progress;
+      else {
+        // レベル・経験値だけ高いほうを採り、連続日数・今日の回数は今のものを残す
+        const higher = progress.level > now.level || (progress.level === now.level && progress.xp > now.xp) ? progress : now;
+        writes.fxProgress = { ...now, level: higher.level, xp: higher.xp, best: { word: Math.max(now.best.word || 0, progress.best.word || 0), compose: Math.max(now.best.compose || 0, progress.best.compose || 0) } };
+      }
+    }
+
+    const keep = new Set(Object.keys(writes));
+    const toRemove = [...new Set(removes)].filter((key) => !keep.has(key));
+    if (toRemove.length) await chrome.storage.local.remove(toRemove);
+    await chrome.storage.local.set(writes);
+    return { success: true, addedBooks, addedWords, skippedBooks, addedHistory, totalBooks: bookList.length, totalHistory: historyList.length };
+  };
+  // 単語帳・履歴の書き込み中に割り込まないよう、両方の書き込み待ちの列に並ぶ
+  const result = Promise.all([wordbookWriteQueue, historyWriteQueue].map((q) => q.catch(() => {}))).then(run);
+  wordbookWriteQueue = result.catch(() => {});
+  historyWriteQueue = result.catch(() => {});
+  return result;
+}
+
+// ---------- 作文テスト ----------
+// 単語帳の未知語をいくつかずつ1文に詰め込んだ英文と、その和訳を作る（利用者は和訳を見て英作文する）。
+// 未知語以外の部分には、大学入試レベル（『Vintage』など）の慣用表現・構文を入れ、解説を付ける。
+const COMPOSE_MAX_WORDS = 30;
+const COMPOSE_MAX_GROUPS = 8;
+
+async function handleComposeWordbookQuiz(request) {
+  const perSentence = Math.min(8, Math.max(2, Number(request.perSentence) || 5));
+  const words = [];
+  const seen = new Set();
+  (Array.isArray(request.words) ? request.words : []).forEach((item) => {
+    const word = clampText(String(item?.word || '').trim(), MAX_WORDBOOK_WORD_CHARS);
+    if (!word || seen.has(word.toLowerCase()) || words.length >= COMPOSE_MAX_WORDS) return;
+    seen.add(word.toLowerCase());
+    words.push({ word, ja: clampText(String(item?.ja || ''), 100) });
+  });
+  if (!words.length) return { success: false, error: '作文テストにする単語がありません。' };
+  const groups = [];
+  for (let i = 0; i < words.length && groups.length < COMPOSE_MAX_GROUPS; i += perSentence) groups.push(words.slice(i, i + perSentence));
+  const config = await getLlmConfig();
+  try {
+    await requirePrivacyConsent();
+    const list = groups.map((group, g) => `Group ${g + 1}: ${group.map((w) => `${w.word}${w.ja ? `（${w.ja}）` : ''}`).join(' / ')}`).join('\n');
+    const prompt = `あなたは日本人の大学受験生・社会人に英作文を教える講師です。次の各グループについて、英作文問題を1問ずつ作ってください。
+${list}
+
+条件:
+- 各問の英文は1文（長くても2文）で、そのグループの語句を「すべて」自然に使う（活用形・複数形への変化は可）。
+- グループの語句以外の部分に、大学入試の英文法・語法・熟語の問題集（『Vintage』『Next Stage』など）に出てくる慣用表現・構文を1〜2個入れる（例: no sooner A than B / cannot help -ing / be bound to do / it goes without saying that / not so much A as B / take ~ for granted）。グループの語句そのものは慣用表現として数えない。
+- 和訳（ja）は、英作文の問題文としてそのまま使える自然な日本語にする。答えの英語の語句を括弧などで書かない。
+- 慣用表現の解説（explanation）は日本語で、意味・形・使い方の注意を短く。
+
+次のJSONだけを返してください。items はグループと同じ順番・同じ数にしてください。
+{
+  "items": [
+    {
+      "en": "模範解答の英文",
+      "ja": "問題文になる和訳",
+      "targets": [{ "word": "グループの語句（入力のまま）", "used": "英文の中で実際に使った形" }],
+      "idioms": [{ "expression": "英文の中で使った慣用表現（英文中の形のまま）", "pattern": "辞書形（例: no sooner A than B）", "meaning": "意味（日本語）", "explanation": "解説（日本語）" }]
+    }
+  ]
+}`;
+    const data = await askLlm(prompt, config);
+    const results = Array.isArray(data?.items) ? data.items : [];
+    const items = groups.map((group, g) => {
+      const hit = results[g] || {};
+      const en = clampText(String(hit.en || ''), 600);
+      const usedList = Array.isArray(hit.targets) ? hit.targets : [];
+      return {
+        en,
+        ja: clampText(String(hit.ja || ''), 400),
+        targets: group.map((w) => {
+          const used = usedList.find((t) => String(t?.word || '').trim().toLowerCase() === w.word.toLowerCase());
+          const form = clampText(String(used?.used || ''), MAX_WORDBOOK_WORD_CHARS);
+          return { word: w.word, ja: w.ja, used: form, missing: !composeContains(en, form || w.word) && !composeContains(en, w.word) };
+        }),
+        idioms: (Array.isArray(hit.idioms) ? hit.idioms : []).slice(0, 3).map((idiom) => ({
+          expression: clampText(String(idiom?.expression || ''), 120),
+          pattern: clampText(String(idiom?.pattern || ''), 120),
+          meaning: clampText(String(idiom?.meaning || ''), 200),
+          explanation: clampText(String(idiom?.explanation || ''), 400),
+        })).filter((idiom) => idiom.expression || idiom.pattern),
+      };
+    }).filter((item) => item.en && item.ja);
+    if (!items.length) return { success: false, error: 'AIの返答から問題を作れませんでした。もう一度試してください。' };
+    return { success: true, items };
+  } catch (err) {
+    await recordDiagnostic('wordbook-compose', config.provider, err.message);
+    return { success: false, error: err.message };
+  }
+}
+
+// 英文に語句が入っているか（大文字小文字を区別せず、語の先頭が一致すればよい。活用形も拾う）
+function composeContains(sentence, word) {
+  const w = String(word || '').trim();
+  if (!w) return false;
+  // 熟語（take ~ for granted など）は、間に語が入ってもよいように、主な語がそれぞれ入っていればよい
+  const parts = w.split(/\s+/).filter((part) => part.replace(/[^A-Za-z]/g, '').length > 2);
+  if (parts.length > 1) return parts.every((part) => composeContains(sentence, part.replace(/[^A-Za-z'-]/g, '')));
+  const stem = w.length > 4 ? w.slice(0, Math.max(4, w.length - 2)) : w;
+  const re = new RegExp(`(^|[^A-Za-z])${stem.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'i');
+  return re.test(String(sentence || ''));
+}
+
 // ============================================================
 // Anki連携（4ノートタイプ対応）
 // ============================================================
@@ -1363,10 +1685,13 @@ function buildVocabClozeNote(ankiConfig, card, tags, allowDuplicate) {
   const phrase = card.targetPhrase || '';
   const context = card.contextSentence || phrase;
   const ja = cardJaOptions(ankiConfig);
-  // 表面の和訳ヒント: 穴の部分の訳（画面で選んだ穴に合わせて渡される）。未指定なら選択部分全体の訳。
+  // 表面の和訳ヒント: 画面で決めたヒントがあればそれを使う。
+  // 未指定なら、設定が「全文日本語」なら文全体の訳、「選択のみ日本語」なら選択部分全体の訳。
   const hint = typeof card.clozeHint === 'string'
     ? card.clozeHint.trim()
-    : String(exp.targetTranslation || exp.sentenceTranslation || '').trim();
+    : String((ankiConfig?.clozeHintMode === 'sentence'
+      ? exp.sentenceTranslation || exp.targetTranslation
+      : exp.targetTranslation || exp.sentenceTranslation) || '').trim();
   const front = clozeContextHtml(context, phrase, card.clozeTargets, card.clozeSeparate === true);
   const generatedFields = {
     Text: cardFront(front + (ja.clozeHint && hint ? `<div style="${CARD_STYLE.hint}">${escapeHtml(hint)}</div>` : '')),
@@ -1622,7 +1947,8 @@ async function mapToModelFields(endpoint, modelName, cardType, fields) {
     values.forEach((value, i) => {
       if (!value) return;
       if (remaining.length) {
-        mapped[take(remaining[0])] = i === 1 && cardType === 'ja-en' ? `<div style="${CARD_STYLE.front}">${escapeHtml(value)}</div>` : value;
+        // 日英の裏面（英文）はエスケープ済みで届くため、一度文字に戻してからエスケープする（二重エスケープで &quot; などが見えないように）
+        mapped[take(remaining[0])] = i === 1 && cardType === 'ja-en' ? `<div style="${CARD_STYLE.front}">${escapeHtml(htmlToPlainText(value))}</div>` : value;
       } else {
         const last = info.fields[info.fields.length - 1];
         mapped[last] = `${mapped[last] || ''}<hr>${value}`;
@@ -1636,7 +1962,68 @@ async function mapToModelFields(endpoint, modelName, cardType, fields) {
   return mapped;
 }
 
-async function handleAddToAnki(request) {
+// ---------- 記事ごとのデッキ ----------
+// 「AnkiRead::Vocab-Cloze」を「AnkiRead::2026-10-14 記事の題名::Vocab-Cloze」に変える。
+// 日付はその記事で最初にカードを作った日で、同じ記事なら後日に作っても同じデッキに入る。
+const ARTICLE_DECK_LIMIT = 1000;
+let articleDeckQueue = Promise.resolve();
+
+function localDateString(time = Date.now()) {
+  const d = new Date(time);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+// デッキ名の1階層分として安全な題名にする（「::」は階層の区切りになるため使わない）
+function deckSafeTitle(value, fallback) {
+  const title = String(value || '')
+    .replace(/[\u0000-\u001f\u007f"]/g, ' ')
+    .replace(/:{2,}/g, ':')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 80)
+    .trim();
+  return title || fallback;
+}
+
+function insertArticleDeck(deckName, articleDeck) {
+  const parts = String(deckName || '').split('::').map((part) => part.trim()).filter(Boolean);
+  if (!parts.length) return articleDeck;
+  const leaf = parts.pop();
+  return [...(parts.length ? parts : [leaf]), articleDeck, leaf].join('::');
+}
+
+function articleDeckFor(senderUrl, rawTitle) {
+  const run = async () => {
+    let key;
+    let host = '';
+    try {
+      key = wordbookPageKey(senderUrl);
+      host = new URL(key).hostname;
+    } catch {
+      return '';
+    }
+    const { ankiArticleDecks = {} } = await chrome.storage.local.get('ankiArticleDecks');
+    const decks = ankiArticleDecks && typeof ankiArticleDecks === 'object' ? ankiArticleDecks : {};
+    let entry = decks[key];
+    if (!entry || !entry.name) {
+      entry = { name: `${localDateString()} ${deckSafeTitle(rawTitle, host || '無題の記事')}`, createdAt: Date.now() };
+      decks[key] = entry;
+      const keys = Object.keys(decks);
+      if (keys.length > ARTICLE_DECK_LIMIT) {
+        keys.sort((a, b) => (decks[a].createdAt || 0) - (decks[b].createdAt || 0))
+          .slice(0, keys.length - ARTICLE_DECK_LIMIT)
+          .forEach((old) => delete decks[old]);
+      }
+      await chrome.storage.local.set({ ankiArticleDecks: decks });
+    }
+    return entry.name;
+  };
+  const result = articleDeckQueue.then(run, run);
+  articleDeckQueue = result.catch(() => {});
+  return result;
+}
+
+async function handleAddToAnki(request, senderUrl = '') {
   const ankiConfig = (await chrome.storage.local.get(['ankiConfig'])).ankiConfig || {};
   let endpoint;
   const card = request.card || {};
@@ -1665,6 +2052,10 @@ async function handleAddToAnki(request) {
   }
 
   try {
+    if (ankiConfig.articleDecks !== false && senderUrl) {
+      const articleDeck = await articleDeckFor(senderUrl, card.articleTitle);
+      if (articleDeck) note.deckName = insertArticleDeck(note.deckName, articleDeck);
+    }
     endpoint = localEndpointUrl(ankiConfig.url, 'http://127.0.0.1:8765', 'AnkiConnect').toString();
     note.fields = await mapToModelFields(endpoint, note.modelName, cardType, note.fields);
     note.fields = sanitizeNoteFields(note.fields);
